@@ -394,7 +394,7 @@ void macho::reportPendingDuplicateSymbols() {
       message += duplicate.src1.second + "\n>>> defined in ";
       if (!duplicate.src2.first.empty())
         message += duplicate.src2.first + "\n>>>            ";
-      error(message + duplicate.src2.second);
+      warn(message + duplicate.src2.second);
     }
   }
 }

@@ -1288,13 +1288,17 @@ targetSymFromCanonicalSubtractor(const InputSection *isec,
   assert(target->hasAttr(minuend.type, RelocAttrBits::UNSIGNED));
   // Note: pcSym may *not* be exactly at the PC; there's usually a non-zero
   // addend.
+  if (!subtrahend.referent.get<macho::Symbol *>()) {
+    return nullptr;
+  }
   auto *pcSym = cast<Defined>(subtrahend.referent.get<macho::Symbol *>());
   Defined *target =
       cast_or_null<Defined>(minuend.referent.dyn_cast<macho::Symbol *>());
   if (!pcSym) {
-    auto *targetIsec =
-        cast<ConcatInputSection>(minuend.referent.get<InputSection *>());
-    target = findSymbolAtOffset(targetIsec, minuend.addend);
+    if (minuend.referent.get<InputSection *>()) {
+      auto *targetIsec = cast<ConcatInputSection>(minuend.referent.get<InputSection *>());
+      target = findSymbolAtOffset(targetIsec, minuend.addend);
+    }
   }
   if (Invert)
     std::swap(pcSym, target);
@@ -1430,7 +1434,7 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
       // to register the unwind entry under same symbol.
       // This is not particularly efficient, but we should run into this case
       // infrequently (only when handling the output of `ld -r`).
-      if (funcSym->isec)
+      if (funcSym && funcSym->isec)
         funcSym = findSymbolAtOffset(cast<ConcatInputSection>(funcSym->isec),
                                      funcSym->value);
     } else {

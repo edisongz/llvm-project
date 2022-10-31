@@ -456,7 +456,7 @@ static void addFramework(StringRef name, bool isNeeded, bool isWeak,
     }
     return;
   }
-  error("framework not found for -framework " + name);
+  warn("framework not found for -framework " + name);
 }
 
 // Parses LC_LINKER_OPTION contents, which can add additional command line
