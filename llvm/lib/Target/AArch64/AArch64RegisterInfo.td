@@ -953,6 +953,75 @@ def PNR32_p8to15  : PNRP8to15RegOp<"s", PNRAsmOp32_p8to15, 32, PPR_p8to15>;
 def PNR64_p8to15  : PNRP8to15RegOp<"d", PNRAsmOp64_p8to15, 64, PPR_p8to15>;
 
 
+let Namespace = "AArch64" in {
+  def psub0 : SubRegIndex<16, -1>;
+  def psub1 : SubRegIndex<16, -1>;
+}
+
+// Pairs of SVE predicate vector registers.
+def PSeqPairs : RegisterTuples<[psub0, psub1], [(rotl PPR, 0), (rotl PPR, 1)]>;
+
+def PPR2 : RegisterClass<"AArch64", [untyped], 16, (add PSeqPairs)> {
+  let Size = 32;
+}
+
+class PPRVectorList<int ElementWidth, int NumRegs> : AsmOperandClass {
+  let Name = "SVEPredicateList" # NumRegs # "x" # ElementWidth;
+  let ParserMethod = "tryParseVectorList<RegKind::SVEPredicateVector>";
+  let PredicateMethod = "isTypedVectorList<RegKind::SVEPredicateVector, "
+                            # NumRegs #", 0, "#ElementWidth #">";
+  let RenderMethod = "addVectorListOperands<AArch64Operand::VecListIdx_PReg, "
+                         # NumRegs #">";
+}
+
+def PP_b : RegisterOperand<PPR2, "printTypedVectorList<0,'b'>"> {
+  let ParserMatchClass = PPRVectorList<8, 2>;
+}
+
+def PP_h : RegisterOperand<PPR2, "printTypedVectorList<0,'h'>"> {
+  let ParserMatchClass = PPRVectorList<16, 2>;
+}
+
+def PP_s : RegisterOperand<PPR2, "printTypedVectorList<0,'s'>"> {
+  let ParserMatchClass = PPRVectorList<32, 2>;
+}
+
+def PP_d : RegisterOperand<PPR2, "printTypedVectorList<0,'d'>"> {
+  let ParserMatchClass = PPRVectorList<64, 2>;
+}
+
+// SVE2 multiple-of-2 multi-predicate-vector operands
+def PPR2Mul2 : RegisterClass<"AArch64", [untyped], 16, (add (decimate PSeqPairs, 2))> {
+  let Size = 32;
+}
+
+class PPRVectorListMul<int ElementWidth, int NumRegs> : PPRVectorList<ElementWidth, NumRegs> {
+  let Name = "SVEPredicateListMul" # NumRegs # "x" # ElementWidth;
+  let DiagnosticType = "Invalid" # Name;
+  let PredicateMethod =
+      "isTypedVectorListMultiple<RegKind::SVEPredicateVector, " # NumRegs # ", 0, "
+                                                                # ElementWidth # ">";
+}
+
+let EncoderMethod = "EncodeRegAsMultipleOf<2>",
+    DecoderMethod = "DecodePPR2Mul2RegisterClass" in {
+  def PP_b_mul_r : RegisterOperand<PPR2Mul2, "printTypedVectorList<0,'b'>"> {
+    let ParserMatchClass = PPRVectorListMul<8, 2>;
+  }
+
+  def PP_h_mul_r : RegisterOperand<PPR2Mul2, "printTypedVectorList<0,'h'>"> {
+    let ParserMatchClass = PPRVectorListMul<16, 2>;
+  }
+
+  def PP_s_mul_r : RegisterOperand<PPR2Mul2, "printTypedVectorList<0,'s'>"> {
+    let ParserMatchClass = PPRVectorListMul<32, 2>;
+  }
+
+  def PP_d_mul_r : RegisterOperand<PPR2Mul2, "printTypedVectorList<0,'d'>"> {
+    let ParserMatchClass = PPRVectorListMul<64, 2>;
+  }
+}  // end let EncoderMethod/DecoderMethod
+
 
 //******************************************************************************
 
@@ -1078,6 +1147,10 @@ def Z_d  : RegisterOperand<ZPR,  "printTypedVectorList<0,'d'>"> {
   let ParserMatchClass = ZPRVectorList<64, 1>;
 }
 
+def Z_q  : RegisterOperand<ZPR,  "printTypedVectorList<0,'q'>"> {
+  let ParserMatchClass = ZPRVectorList<128, 1>;
+}
+
 def ZZ_b  : RegisterOperand<ZPR2, "printTypedVectorList<0,'b'>"> {
   let ParserMatchClass = ZPRVectorList<8, 2>;
 }
@@ -1160,6 +1233,10 @@ let EncoderMethod = "EncodeRegAsMultipleOf<2>",
   def ZZ_d_mul_r : RegisterOperand<ZPR2Mul2, "printTypedVectorList<0,'d'>"> {
     let ParserMatchClass = ZPRVectorListMul<64, 2>;
   }
+
+  def ZZ_q_mul_r : RegisterOperand<ZPR2Mul2, "printTypedVectorList<0,'q'>"> {
+    let ParserMatchClass = ZPRVectorListMul<128, 2>;
+  }
 } // end let EncoderMethod/DecoderMethod
 
 let EncoderMethod = "EncodeRegAsMultipleOf<4>",
@@ -1178,6 +1255,10 @@ let EncoderMethod = "EncodeRegAsMultipleOf<4>",
 
   def ZZZZ_d_mul_r : RegisterOperand<ZPR4Mul4, "printTypedVectorList<0,'d'>"> {
     let ParserMatchClass = ZPRVectorListMul<64, 4>;
+  }
+
+  def ZZZZ_q_mul_r : RegisterOperand<ZPR4Mul4, "printTypedVectorList<0,'q'>"> {
+    let ParserMatchClass = ZPRVectorListMul<128, 4>;
   }
 } // end let EncoderMethod/DecoderMethod
 
@@ -1317,6 +1398,8 @@ let SubRegIndices = [zasubb] in {
   def ZA : AArch64Reg<0, "za", [ZAB0]>;
 }
 
+def ZT0 : AArch64Reg<0, "zt0">;
+
 // SME Register Classes
 
 let isAllocatable = 0 in {
@@ -1343,6 +1426,10 @@ let isAllocatable = 0 in {
   }
 }
 
+def ZTR : RegisterClass<"AArch64", [untyped], 512, (add ZT0)> {
+  let Size = 512;
+  let DiagnosticType = "InvalidLookupTable";
+}
 // SME Register Operands
 // There are three types of SME matrix register operands:
 // * Tiles:
@@ -1455,6 +1542,8 @@ class MatrixOperand<RegisterClass RC, int EltSize> : RegisterOperand<RC> {
 
 def MatrixOp : MatrixOperand<MPR, 0>;
 // SME2 register operands and classes
+def MatrixOp8 : MatrixOperand<MPR, 8>;
+def MatrixOp16 : MatrixOperand<MPR, 16>;
 def MatrixOp32 : MatrixOperand<MPR, 32>;
 def MatrixOp64 : MatrixOperand<MPR, 64>;
 
