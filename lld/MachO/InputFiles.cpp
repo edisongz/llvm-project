@@ -814,8 +814,8 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         InputSection *isec =
             findContainingSubsection(*sections[i], &symbolOffset);
         if (symbolOffset != 0) {
-          error(toString(*sections[i]) + ":  symbol " + name +
-                " at misaligned offset");
+          warn(toString(*sections[i]) + ":  symbol " + name +
+               " at misaligned offset");
           continue;
         }
         symbols[symIndex] =

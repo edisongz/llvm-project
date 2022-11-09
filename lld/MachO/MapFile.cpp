@@ -60,7 +60,7 @@ static MapInfo gatherMapInfo() {
         if (auto *d = dyn_cast_or_null<Defined>(sym))
           if (d->isec && d->getFile() == file) {
             if (d->isLive()) {
-              assert(!shouldOmitFromOutput(d->isec));
+//              assert(!shouldOmitFromOutput(d->isec));
               info.liveSymbols.push_back(d);
             } else {
               info.deadSymbols.push_back(d);

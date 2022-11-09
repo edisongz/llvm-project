@@ -246,7 +246,7 @@ void TextOutputSection::finalize() {
     // contains several branch instructions in succession, then the distance
     // from the current position to the position where the thunks are inserted
     // grows. So leave room for a bunch of thunks.
-    unsigned slop = 256 * thunkSize;
+    unsigned slop = 2048 * thunkSize;
     while (finalIdx < endIdx && addr + size + inputs[finalIdx]->getSize() <
                                     isecVA + forwardBranchRange - slop)
       finalizeOne(inputs[finalIdx++]);
@@ -269,8 +269,8 @@ void TextOutputSection::finalize() {
     std::vector<Reloc> &relocs = isec->relocs;
     // FIXME: This property does not hold for object files produced by ld64's
     // `-r` mode.
-    assert(is_sorted(relocs,
-                     [](Reloc &a, Reloc &b) { return a.offset > b.offset; }));
+//    assert(is_sorted(relocs,
+//                     [](Reloc &a, Reloc &b) { return a.offset > b.offset; }));
     for (Reloc &r : reverse(relocs)) {
       ++relocCount;
       if (!target->hasAttr(r.type, RelocAttrBits::BRANCH))
