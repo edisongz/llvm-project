@@ -133,6 +133,8 @@ public:
   // True if this is a lazy ObjFile or BitcodeFile.
   bool lazy = false;
 
+  std::atomic_bool lazyArchiveMember{false};
+  
 protected:
   InputFile(Kind kind, MemoryBufferRef mb, bool lazy = false)
       : mb(mb), id(idCount++), lazy(lazy), fileKind(kind),
@@ -161,7 +163,8 @@ public:
   ArrayRef<llvm::MachO::data_in_code_entry> getDataInCode() const;
   ArrayRef<uint8_t> getOptimizationHints() const;
   template <class LP> void parse();
-
+  void parseFile();
+  
   static bool classof(const InputFile *f) { return f->kind() == ObjKind; }
 
   std::string sourceFile() const;
@@ -181,7 +184,9 @@ public:
 
 private:
   llvm::once_flag initDwarf;
+  template <class LP> void parseObjFileLinkerOption();
   template <class LP> void parseLazy();
+  template <class LP> void parseLazyObjFile();
   template <class SectionHeader> void parseSections(ArrayRef<SectionHeader>);
   template <class LP>
   void parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
@@ -279,10 +284,10 @@ public:
   explicit ArchiveFile(std::unique_ptr<llvm::object::Archive> &&file,
                        bool forceHidden);
   void addLazySymbols();
-  void fetch(const llvm::object::Archive::Symbol &);
+  void fetch(const llvm::object::Archive::Symbol &, bool lazyArchiveMember = false);
   // LLD normally doesn't use Error for error-handling, but the underlying
   // Archive library does, so this is the cleanest way to wrap it.
-  Error fetch(const llvm::object::Archive::Child &, StringRef reason);
+  Error fetch(const llvm::object::Archive::Child &, StringRef reason, bool lazyArchiveMember = false);
   const llvm::object::Archive &getArchive() const { return *file; };
   static bool classof(const InputFile *f) { return f->kind() == ArchiveKind; }
 
@@ -302,12 +307,14 @@ public:
                        bool forceHidden = false);
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
   void parse();
+  void parseBitcodeFile();
 
   std::unique_ptr<llvm::lto::InputFile> obj;
   bool forceHidden;
 
 private:
   void parseLazy();
+  void parseLazyObjFile();
 };
 
 extern llvm::SetVector<InputFile *> inputFiles;
@@ -316,6 +323,7 @@ extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
 llvm::Optional<MemoryBufferRef> readFile(StringRef path);
 
 void extract(InputFile &file, StringRef reason);
+void extractArchiveMember(InputFile &file, StringRef reason);
 
 namespace detail {
 

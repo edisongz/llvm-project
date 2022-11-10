@@ -310,7 +310,7 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
         StringRef(sec.sectname, strnlen(sec.sectname, sizeof(sec.sectname)));
     StringRef segname =
         StringRef(sec.segname, strnlen(sec.segname, sizeof(sec.segname)));
-    sections.push_back(make<Section>(this, segname, name, sec.flags, sec.addr));
+    sections.push_back(new Section(this, segname, name, sec.flags, sec.addr));
     if (sec.align >= 32) {
       error("alignment " + std::to_string(sec.align) + " of section " + name +
             " is too large");
@@ -328,7 +328,7 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
       Subsections &subsections = section.subsections;
       subsections.reserve(data.size() / recordSize);
       for (uint64_t off = 0; off < data.size(); off += recordSize) {
-        auto *isec = make<ConcatInputSection>(
+        auto *isec = new ConcatInputSection(
             section, data.slice(off, recordSize), align);
         subsections.push_back({off, isec});
       }
@@ -345,14 +345,14 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
 
       InputSection *isec;
       if (sectionType(sec.flags) == S_CSTRING_LITERALS) {
-        isec = make<CStringInputSection>(section, data, align,
+        isec = new CStringInputSection(section, data, align,
                                          /*dedupLiterals=*/name ==
                                                  section_names::objcMethname ||
                                              config->dedupLiterals);
         // FIXME: parallelize this?
         cast<CStringInputSection>(isec)->splitIntoPieces();
       } else {
-        isec = make<WordLiteralInputSection>(section, data, align);
+        isec = new WordLiteralInputSection(section, data, align);
       }
       section.subsections.push_back({0, isec});
     } else if (auto recordSize = getRecordSize(segname, name)) {
@@ -376,7 +376,7 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
       if (name == section_names::addrSig)
         addrSigSection = sections.back();
 
-      auto *isec = make<ConcatInputSection>(section, data, align);
+      auto *isec = new ConcatInputSection(section, data, align);
       if (isDebugSection(isec->getFlags()) &&
           isec->getSegName() == segment_names::dwarf) {
         // Instead of emitting DWARF sections, we emit STABS symbols to the
@@ -409,7 +409,7 @@ void ObjFile::splitEhFrames(ArrayRef<uint8_t> data, Section &ehFrameSection) {
     // Note that we still want to preserve the alignment of the overall section,
     // just not of the individual EH frames.
     ehFrameSection.subsections.push_back(
-        {frameOff, make<ConcatInputSection>(ehFrameSection,
+        {frameOff, new ConcatInputSection(ehFrameSection,
                                             data.slice(frameOff, fullLength),
                                             /*align=*/1)});
   }
@@ -693,7 +693,7 @@ static macho::Symbol *createDefined(const NList &sym, StringRef name,
          "weak_def_can_be_hidden on already-hidden symbol?");
   bool includeInSymtab =
       !name.startswith("l") && !name.startswith("L") && !isEhFrameSection(isec);
-  return make<Defined>(
+  return new Defined(
       name, isec->getFile(), isec, value, size, sym.n_desc & N_WEAK_DEF,
       /*isExternal=*/false, /*isPrivateExtern=*/false, includeInSymtab,
       sym.n_desc & N_ARM_THUMB_DEF, sym.n_desc & REFERENCED_DYNAMICALLY,
@@ -713,7 +713,7 @@ static macho::Symbol *createAbsolute(const NList &sym, InputFile *file,
         /*isReferencedDynamically=*/false, sym.n_desc & N_NO_DEAD_STRIP,
         /*isWeakDefCanBeHidden=*/false);
   }
-  return make<Defined>(name, file, nullptr, sym.n_value, /*size=*/0,
+  return new Defined(name, file, nullptr, sym.n_value, /*size=*/0,
                        /*isWeakDef=*/false,
                        /*isExternal=*/false, /*isPrivateExtern=*/false,
                        /*includeInSymtab=*/true, sym.n_desc & N_ARM_THUMB_DEF,
@@ -744,7 +744,7 @@ macho::Symbol *ObjFile::parseNonSectionSymbol(const NList &sym,
     StringRef aliasedName = StringRef(strtab + sym.n_value);
     // isPrivateExtern is the only symbol flag that has an impact on the final
     // aliased symbol.
-    auto alias = make<AliasSymbol>(this, name, aliasedName, isPrivateExtern);
+    auto alias = new AliasSymbol(this, name, aliasedName, isPrivateExtern);
     aliases.push_back(alias);
     return alias;
   }
@@ -861,7 +861,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
       }
       auto *concatIsec = cast<ConcatInputSection>(isec);
 
-      auto *nextIsec = make<ConcatInputSection>(*concatIsec);
+      auto *nextIsec = new ConcatInputSection(*concatIsec);
       nextIsec->wasCoalesced = false;
       if (isZeroFill(isec->getFlags())) {
         // Zero-fill sections have NULL data.data() non-zero data.size()
@@ -912,11 +912,27 @@ ObjFile::ObjFile(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
                  bool lazy, bool forceHidden)
     : InputFile(ObjKind, mb, lazy), modTime(modTime), forceHidden(forceHidden) {
   this->archiveName = std::string(archiveName);
-  if (lazy) {
-    if (target->wordSize == 8)
-      parseLazy<LP64>();
-    else
-      parseLazy<ILP32>();
+  if (target->wordSize == 8) {
+    parseObjFileLinkerOption<LP64>();
+  } else {
+    parseObjFileLinkerOption<ILP32>();
+  }
+}
+
+void ObjFile::parseFile() {
+  auto lazyArchive = lazyArchiveMember.load(std::memory_order_relaxed);
+  if (lazy || lazyArchive) {
+    if (lazyArchive) {
+      if (target->wordSize == 8)
+        parseLazyObjFile<LP64>();
+      else
+        parseLazyObjFile<ILP32>();
+    } else {
+      if (target->wordSize == 8)
+        parseLazy<LP64>();
+      else
+        parseLazy<ILP32>();
+    }
   } else {
     if (target->wordSize == 8)
       parse<LP64>();
@@ -950,12 +966,6 @@ template <class LP> void ObjFile::parse() {
 
   if (!checkCompatibility(this))
     return;
-
-  for (auto *cmd : findCommands<linker_option_command>(hdr, LC_LINKER_OPTION)) {
-    StringRef data{reinterpret_cast<const char *>(cmd + 1),
-                   cmd->cmdsize - sizeof(linker_option_command)};
-    parseLCLinkerOption(this, cmd->count, data);
-  }
 
   ArrayRef<SectionHeader> sectionHeaders;
   if (const load_command *cmd = findCommand(hdr, LP::segmentLCType)) {
@@ -999,6 +1009,35 @@ template <class LP> void ObjFile::parse() {
     registerEhFrames(*ehFrameSection);
 }
 
+template <class LP> void ObjFile::parseObjFileLinkerOption() {
+  using Header = typename LP::mach_header;
+  
+  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+
+  uint32_t cpuType;
+  std::tie(cpuType, std::ignore) = getCPUTypeFromArchitecture(config->arch());
+  if (hdr->cputype != cpuType) {
+    Architecture arch =
+        getArchitectureFromCpuType(hdr->cputype, hdr->cpusubtype);
+    auto msg = config->errorForArchMismatch
+                   ? static_cast<void (*)(const Twine &)>(error)
+                   : warn;
+    msg(toString(this) + " has architecture " + getArchitectureName(arch) +
+        " which is incompatible with target architecture " +
+        getArchitectureName(config->arch()));
+    return;
+  }
+
+  if (!checkCompatibility(this))
+    return;
+
+  for (auto *cmd : findCommands<linker_option_command>(hdr, LC_LINKER_OPTION)) {
+    StringRef data{reinterpret_cast<const char *>(cmd + 1),
+                   cmd->cmdsize - sizeof(linker_option_command)};
+    parseLCLinkerOption(this, cmd->count, data);
+  }
+}
+
 template <class LP> void ObjFile::parseLazy() {
   using Header = typename LP::mach_header;
   using NList = typename LP::nlist;
@@ -1024,6 +1063,30 @@ template <class LP> void ObjFile::parseLazy() {
   }
 }
 
+template <class LP> void ObjFile::parseLazyObjFile() {
+  using Header = typename LP::mach_header;
+  using NList = typename LP::nlist;
+
+  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
+  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
+  if (!cmd)
+    return;
+  auto *c = reinterpret_cast<const symtab_command *>(cmd);
+  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
+                        c->nsyms);
+  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
+  symbols.resize(nList.size());
+  for (const auto &[i, sym] : llvm::enumerate(nList)) {
+    if ((sym.n_type & N_EXT) && !isUndef(sym)) {
+      StringRef name = strtab + sym.n_strx;
+      symbols[i] = symtab->addLazyObjFile(name, this);
+      if (!lazyArchiveMember.load(std::memory_order_relaxed))
+        break;
+    }
+  }
+}
+
 void ObjFile::parseDebugInfo() {
   std::unique_ptr<DwarfObject> dObj = DwarfObject::create(this);
   if (!dObj)
@@ -1031,7 +1094,7 @@ void ObjFile::parseDebugInfo() {
 
   // We do not re-use the context from getDwarf() here as that function
   // constructs an expensive DWARFCache object.
-  auto *ctx = make<DWARFContext>(
+  auto *ctx = new DWARFContext(
       std::move(dObj), "",
       [&](Error err) {
         warn(toString(this) + ": " + toString(std::move(err)));
@@ -1350,13 +1413,13 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
     // Subtractor relocs require the subtrahend to be a symbol reloc. Ensure
     // that all EH frames have an associated symbol so that we can generate
     // subtractor relocs that reference them.
-    if (isec->symbols.size() == 0)
-      isec->symbols.push_back(make<Defined>(
+    if (isec->symbols.size() == 0) {
+      isec->symbols.push_back(new Defined(
           "EH_Frame", isec->getFile(), isec, /*value=*/0, /*size=*/0,
           /*isWeakDef=*/false, /*isExternal=*/false, /*isPrivateExtern=*/false,
           /*includeInSymtab=*/false, /*isThumb=*/false,
           /*isReferencedDynamically=*/false, /*noDeadStrip=*/false));
-    else if (isec->symbols[0]->value != 0)
+    } else if (isec->symbols[0]->value != 0)
       fatal("found symbol at unexpected offset in __eh_frame");
 
     EhReader reader(this, isec->data, subsec.offset);
@@ -2080,10 +2143,10 @@ loadArchiveMember(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
 
   switch (identify_magic(mb.getBuffer())) {
   case file_magic::macho_object:
-    return make<ObjFile>(mb, modTime, archiveName, /*lazy=*/false, forceHidden);
+    return new ObjFile(mb, modTime, archiveName, /*lazy=*/false, forceHidden);
   case file_magic::bitcode:
-    return make<BitcodeFile>(mb, archiveName, offsetInArchive, /*lazy=*/false,
-                             forceHidden);
+    return new BitcodeFile(mb, archiveName, offsetInArchive, /*lazy=*/false,
+                           forceHidden);
   default:
     return createStringError(inconvertibleErrorCode(),
                              mb.getBufferIdentifier() +
@@ -2091,7 +2154,7 @@ loadArchiveMember(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
   }
 }
 
-Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason) {
+Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason, bool lazyArchiveMember) {
   if (!seen.insert(c.getChildOffset()).second)
     return Error::success();
 
@@ -2113,12 +2176,13 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason) {
   if (!file)
     return file.takeError();
 
+  (*file)->lazyArchiveMember.store(lazyArchiveMember, std::memory_order_relaxed);
   inputFiles.insert(*file);
   printArchiveMemberLoad(reason, *file);
   return Error::success();
 }
 
-void ArchiveFile::fetch(const object::Archive::Symbol &sym) {
+void ArchiveFile::fetch(const llvm::object::Archive::Symbol &sym, bool lazyArchiveMember) {
   object::Archive::Child c =
       CHECK(sym.getMember(), toString(this) +
                                  ": could not get the member defining symbol " +
@@ -2131,7 +2195,7 @@ void ArchiveFile::fetch(const object::Archive::Symbol &sym) {
 
   // ld64 doesn't demangle sym here even with -demangle.
   // Match that: intentionally don't call toMachOString().
-  if (Error e = fetch(c, symCopy.getName()))
+  if (Error e = fetch(c, symCopy.getName(), lazyArchiveMember))
     error(toString(this) + ": could not get the member defining symbol " +
           toMachOString(symCopy) + ": " + toString(std::move(e)));
 }
@@ -2190,10 +2254,6 @@ BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
                                                utostr(offsetInArchive)));
 
   obj = check(lto::InputFile::create(mbref));
-  if (lazy)
-    parseLazy();
-  else
-    parse();
 }
 
 void BitcodeFile::parse() {
@@ -2203,6 +2263,18 @@ void BitcodeFile::parse() {
   symbols.clear();
   for (const lto::InputFile::Symbol &objSym : obj->symbols())
     symbols.push_back(createBitcodeSymbol(objSym, *this));
+}
+
+void BitcodeFile::parseBitcodeFile() {
+  auto lazyArchive = lazyArchiveMember.load(std::memory_order_relaxed);
+  if (lazy || lazyArchive) {
+    if (lazyArchive)
+      parseLazyObjFile();
+    else
+      parseLazy();
+  }
+  else
+    parse();
 }
 
 void BitcodeFile::parseLazy() {
@@ -2216,9 +2288,35 @@ void BitcodeFile::parseLazy() {
   }
 }
 
+void BitcodeFile::parseLazyObjFile() {
+  symbols.resize(obj->symbols().size());
+  for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
+    if (!objSym.isUndefined()) {
+      symbols[i] = symtab->addLazyObjFile(saver().save(objSym.getName()), this);
+      if (!lazyArchiveMember.load(std::memory_order_relaxed))
+        break;
+    }
+  }
+}
+
 void macho::extract(InputFile &file, StringRef reason) {
   assert(file.lazy);
   file.lazy = false;
+  printArchiveMemberLoad(reason, &file);
+  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
+    bitcode->parse();
+  } else {
+    auto &f = cast<ObjFile>(file);
+    if (target->wordSize == 8)
+      f.parse<LP64>();
+    else
+      f.parse<ILP32>();
+  }
+}
+
+void macho::extractArchiveMember(InputFile &file, StringRef reason) {
+  assert(file.lazyArchiveMember.load(std::memory_order_relaxed));
+  file.lazyArchiveMember.store(false, std::memory_order_relaxed);
   printArchiveMemberLoad(reason, &file);
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
     bitcode->parse();

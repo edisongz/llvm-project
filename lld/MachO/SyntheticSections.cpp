@@ -1148,7 +1148,7 @@ void SymtabSection::emitStabs() {
     if (auto *defined = dyn_cast<Defined>(sym)) {
       // Excluded symbols should have been filtered out in finalizeContents().
       assert(defined->includeInSymtab);
-
+      
       if (defined->isAbsolute())
         continue;
 

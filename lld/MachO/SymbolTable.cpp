@@ -22,6 +22,7 @@ using namespace lld;
 using namespace lld::macho;
 
 Symbol *SymbolTable::find(CachedHashStringRef cachedName) {
+  std::shared_lock<sys::RWMutex> symMapGuard(symMapMutex);
   auto it = symMap.find(cachedName);
   if (it == symMap.end())
     return nullptr;
@@ -30,6 +31,7 @@ Symbol *SymbolTable::find(CachedHashStringRef cachedName) {
 
 std::pair<Symbol *, bool> SymbolTable::insert(StringRef name,
                                               const InputFile *file) {
+  std::lock_guard<sys::RWMutex> symMapGuard(symMapMutex);
   auto p = symMap.insert({CachedHashStringRef(name), (int)symVector.size()});
 
   Symbol *sym;
@@ -153,6 +155,8 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
     lazy->fetchArchiveMember();
   else if (isa<LazyObject>(s))
     extract(*s->getFile(), s->getName());
+  else if (isa<LazyObjFile>(s))
+    extractArchiveMember(*s->getFile(), s->getName());
   else if (auto *dynsym = dyn_cast<DylibSymbol>(s))
     dynsym->reference(refState);
   else if (auto *undefined = dyn_cast<Undefined>(s))
@@ -244,6 +248,24 @@ Symbol *SymbolTable::addLazyObject(StringRef name, InputFile &file) {
         extract(file, name);
       else
         replaceSymbol<LazyObject>(s, file, name);
+    }
+  }
+  return s;
+}
+
+Symbol *SymbolTable::addLazyObjFile(StringRef name, InputFile *file) {
+  auto [s, wasInserted] = insert(name, file);
+
+  if (wasInserted) {
+    replaceSymbol<LazyObjFile>(s, file, name);
+  } else if (isa<Undefined>(s)) {
+    extractArchiveMember(*file, name);
+  } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
+    if (dysym->isWeakDef()) {
+      if (dysym->getRefState() != RefState::Unreferenced)
+        extractArchiveMember(*file, name);
+      else
+        replaceSymbol<LazyObjFile>(s, file, name);
     }
   }
   return s;

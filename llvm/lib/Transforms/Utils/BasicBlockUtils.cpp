@@ -368,6 +368,8 @@ static bool removeRedundantDbgInstrsUsingBackwardScan(BasicBlock *BB) {
   SmallDenseSet<DebugVariable> VariableSet;
   for (auto &I : reverse(*BB)) {
     if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(&I)) {
+      if (!DVI->getDebugLoc())
+        continue;
       DebugVariable Key(DVI->getVariable(),
                         DVI->getExpression(),
                         DVI->getDebugLoc()->getInlinedAt());
@@ -416,6 +418,8 @@ static bool removeRedundantDbgInstrsUsingForwardScan(BasicBlock *BB) {
       VariableMap;
   for (auto &I : *BB) {
     if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(&I)) {
+      if (!DVI->getDebugLoc())
+        continue;
       DebugVariable Key(DVI->getVariable(),
                         NoneType(),
                         DVI->getDebugLoc()->getInlinedAt());

@@ -355,13 +355,25 @@ static InputFile *addFile(StringRef path, LoadType loadType,
       }
     }
 
-    file->addLazySymbols();
+//    file->addLazySymbols();
+    {
+      Error e = Error::success();
+      for (const object::Archive::Child &c : file->getArchive().children(e)) {
+        if (Error e = file->fetch(c, "LazySymbol", true))
+          error(toString(file) + ": " + "LazySymbol" +
+                " failed to load archive member: " + toString(std::move(e)));
+      }
+      if (e)
+        error(toString(file) +
+              ": Archive::children failed: " + toString(std::move(e)));
+    }
+    
     loadedArchives[path] = ArchiveFileInfo{file, isCommandLineLoad};
     newFile = file;
     break;
   }
   case file_magic::macho_object:
-    newFile = make<ObjFile>(mbref, getModTime(path), "", isLazy);
+    newFile = new ObjFile(mbref, getModTime(path), "", isLazy);
     break;
   case file_magic::macho_dynamically_linked_shared_lib:
   case file_magic::macho_dynamically_linked_shared_lib_stub:
@@ -386,16 +398,16 @@ static InputFile *addFile(StringRef path, LoadType loadType,
     error(path + ": unhandled file type");
   }
   if (newFile && !isa<DylibFile>(newFile)) {
-    if ((isa<ObjFile>(newFile) || isa<BitcodeFile>(newFile)) && newFile->lazy &&
-        config->forceLoadObjC) {
-      for (Symbol *sym : newFile->symbols)
-        if (sym && sym->getName().startswith(objc::klass)) {
-          extract(*newFile, "-ObjC");
-          break;
-        }
-      if (newFile->lazy && hasObjCSection(mbref))
-        extract(*newFile, "-ObjC");
-    }
+//    if ((isa<ObjFile>(newFile) || isa<BitcodeFile>(newFile)) && newFile->lazy &&
+//        config->forceLoadObjC) {
+//      for (Symbol *sym : newFile->symbols)
+//        if (sym && sym->getName().startswith(objc::klass)) {
+//          extract(*newFile, "-ObjC");
+//          break;
+//        }
+//      if (newFile->lazy && hasObjCSection(mbref))
+//        extract(*newFile, "-ObjC");
+//    }
 
     // printArchiveMemberLoad() prints both .a and .o names, so no need to
     // print the .a name here. Similarly skip lazy files.
@@ -1137,6 +1149,33 @@ static void createFiles(const InputArgList &args) {
   }
 }
 
+static void parseInputFiles() {
+  TimeTraceScope timeScope("Parse input files");
+//  parallelForEach(inputFiles, [](InputFile *file) {
+  for (InputFile *file : inputFiles) {
+    if (auto *objFile = dyn_cast<ObjFile>(file)) {
+      objFile->parseFile();
+    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
+      bitcodeFile->parseBitcodeFile();
+    }
+  }
+  
+  for (InputFile *file : inputFiles) {
+    if ((isa<ObjFile>(file) || isa<BitcodeFile>(file)) &&
+        config->forceLoadObjC) {
+      if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        for (Symbol *sym : file->symbols)
+          if (sym && sym->getName().startswith(objc::klass)) {
+            extractArchiveMember(*file, "-ObjC");
+            break;
+          }
+        if (file->lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(file->mb))
+          extractArchiveMember(*file, "-ObjC");
+      }
+    }
+  }
+}
+
 static void gatherInputSections() {
   TimeTraceScope timeScope("Gathering input sections");
   int inputOrder = 0;
@@ -1757,6 +1796,27 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
 
     initLLVM(); // must be run before any call to addFile()
     createFiles(args);
+    parseInputFiles();
+        
+    inputFiles.remove_if([&](const InputFile *file) {
+      if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        return true;
+      }
+      return false;
+    });
+    
+    int objCnt = 0;
+    for (const auto &file: inputFiles) {
+      if (isa<ObjFile>(file)) {
+        fprintf(stderr, "objfile :%s, archiveName:%s\n", file->getName().data(), file->archiveName.data());
+        ++objCnt;
+      } else if (isa<BitcodeFile>(file)) {
+        fprintf(stderr, "bitcode file :%s, archiveName:%s\n", file->getName().data(), file->archiveName.data());
+      } else if (isa<ArchiveFile>(file)) {
+        fprintf(stderr, "archive file :%s, archiveName:%s\n", file->getName().data(), file->archiveName.data());
+      }
+    }
+    fprintf(stderr, "2 - objfile count:%d/%d\n", objCnt, (int)inputFiles.size());
 
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.

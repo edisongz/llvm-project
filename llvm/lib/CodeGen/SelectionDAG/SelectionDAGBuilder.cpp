@@ -1374,7 +1374,7 @@ bool SelectionDAGBuilder::handleDebugValue(ArrayRef<const Value *> Values,
                                            DIExpression *Expr, DebugLoc dl,
                                            DebugLoc InstDL, unsigned Order,
                                            bool IsVariadic) {
-  if (Values.empty())
+  if (!dl || Values.empty())
     return true;
   SmallVector<SDDbgOperand> LocationOps;
   SmallVector<SDNode *> Dependencies;
@@ -5598,6 +5598,8 @@ bool SelectionDAGBuilder::EmitFuncArgumentDbgValue(
     // we should only emit as ArgDbgValue if the Variable is an argument to the
     // current function, and the dbg.value intrinsic is found in the entry
     // block.
+    if (!DL)
+      return false;
     bool VariableIsFunctionInputArg = Variable->isParameter() &&
         !DL->getInlinedAt();
     bool IsInPrologue = SDNodeOrder == LowestSDNodeOrder;

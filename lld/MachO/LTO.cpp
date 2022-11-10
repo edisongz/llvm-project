@@ -192,8 +192,9 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
       saveOrHardlinkBuffer(objBuf, filePath, cachePath);
       modTime = getModTime(filePath);
     }
-    ret.push_back(make<ObjFile>(
-        MemoryBufferRef(objBuf, saver().save(filePath.str())), modTime, ""));
+    auto objFile = new ObjFile(MemoryBufferRef(objBuf, saver().save(filePath.str())), modTime, "");
+    objFile->parseFile();
+    ret.push_back(objFile);
   }
 
   return ret;

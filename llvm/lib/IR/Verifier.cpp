@@ -6312,6 +6312,7 @@ void Verifier::verifyNoAliasScopeDecl() {
 //===----------------------------------------------------------------------===//
 
 bool llvm::verifyFunction(const Function &f, raw_ostream *OS) {
+    return false;
   Function &F = const_cast<Function &>(f);
 
   // Don't use a raw_null_ostream.  Printing IR is expensive.
@@ -6324,6 +6325,7 @@ bool llvm::verifyFunction(const Function &f, raw_ostream *OS) {
 
 bool llvm::verifyModule(const Module &M, raw_ostream *OS,
                         bool *BrokenDebugInfo) {
+    return false;
   // Don't use a raw_null_ostream.  Printing IR is expensive.
   Verifier V(OS, /*ShouldTreatBrokenDebugInfoAsError=*/!BrokenDebugInfo, M);
 
@@ -6752,9 +6754,9 @@ VerifierAnalysis::Result VerifierAnalysis::run(Function &F,
 }
 
 PreservedAnalyses VerifierPass::run(Module &M, ModuleAnalysisManager &AM) {
-  auto Res = AM.getResult<VerifierAnalysis>(M);
-  if (FatalErrors && (Res.IRBroken || Res.DebugInfoBroken))
-    report_fatal_error("Broken module found, compilation aborted!");
+//  auto Res = AM.getResult<VerifierAnalysis>(M);
+//  if (FatalErrors && (Res.IRBroken || Res.DebugInfoBroken))
+//    report_fatal_error("Broken module found, compilation aborted!");
 
   return PreservedAnalyses::all();
 }

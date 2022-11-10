@@ -15,6 +15,7 @@
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Object/Archive.h"
+#include "llvm/Support/RWMutex.h"
 
 namespace lld::macho {
 
@@ -55,6 +56,7 @@ public:
 
   Symbol *addLazyArchive(StringRef name, ArchiveFile *file,
                          const llvm::object::Archive::Symbol &sym);
+  Symbol *addLazyObjFile(StringRef name, InputFile *file);
   Symbol *addLazyObject(StringRef name, InputFile &file);
 
   Defined *addSynthetic(StringRef name, InputSection *, uint64_t value,
@@ -67,6 +69,7 @@ public:
 
 private:
   std::pair<Symbol *, bool> insert(StringRef name, const InputFile *);
+  llvm::sys::RWMutex symMapMutex;
   llvm::DenseMap<llvm::CachedHashStringRef, int> symMap;
   std::vector<Symbol *> symVector;
 };

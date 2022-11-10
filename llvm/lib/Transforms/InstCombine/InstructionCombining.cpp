@@ -4154,6 +4154,8 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock,
     // here).
     if (isa<DbgDeclareInst>(User))
       continue;
+    if (!User->getDebugLoc())
+      continue;
 
     DebugVariable DbgUserVariable =
         DebugVariable(User->getVariable(), User->getExpression(),

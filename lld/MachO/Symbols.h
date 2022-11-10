@@ -38,6 +38,7 @@ public:
     DylibKind,
     LazyArchiveKind,
     LazyObjectKind,
+    LazyObjFileKind,
     AliasKind,
   };
 
@@ -53,7 +54,7 @@ public:
 
   bool isLive() const { return used; }
   bool isLazy() const {
-    return symbolKind == LazyArchiveKind || symbolKind == LazyObjectKind;
+    return symbolKind == LazyArchiveKind || symbolKind == LazyObjectKind || symbolKind == LazyObjFileKind;
   }
 
   virtual uint64_t getVA() const { return 0; }
@@ -315,6 +316,14 @@ public:
 
 private:
   const llvm::object::Archive::Symbol sym;
+};
+
+class LazyObjFile : public Symbol {
+public:
+  LazyObjFile(InputFile *file, StringRef name)
+      : Symbol(LazyObjFileKind, name, file) {}
+
+  static bool classof(const Symbol *s) { return s->kind() == LazyObjFileKind; }
 };
 
 // A defined symbol in an ObjFile/BitcodeFile surrounded by --start-lib and
