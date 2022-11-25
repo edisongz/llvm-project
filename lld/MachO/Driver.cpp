@@ -1151,14 +1151,23 @@ static void createFiles(const InputArgList &args) {
 
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
-//  parallelForEach(inputFiles, [](InputFile *file) {
-  for (InputFile *file : inputFiles) {
+  lazySymbolCnt.store(0);
+//  for (InputFile *file : inputFiles) {
+//    if (auto *objFile = dyn_cast<ObjFile>(file)) {
+//      objFile->parseFile();
+//    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
+//      bitcodeFile->parseBitcodeFile();
+//    }
+//  }
+  
+  parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseFile();
+      objFile->parseOnce();
     } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
       bitcodeFile->parseBitcodeFile();
     }
-  }
+  });
+  fprintf(stderr, "lazySymbolCnt:%ld\n", lazySymbolCnt.load());
 }
 
 static void gatherInputSections() {

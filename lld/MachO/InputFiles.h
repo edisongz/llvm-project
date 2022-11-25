@@ -166,6 +166,7 @@ public:
   ArrayRef<uint8_t> getOptimizationHints() const;
   template <class LP> void parse();
   void parseFile();
+  void parseOnce();
   
   static bool classof(const InputFile *f) { return f->kind() == ObjKind; }
 
@@ -186,6 +187,7 @@ public:
 
 private:
   llvm::once_flag initDwarf;
+  llvm::once_flag parseFlag;
   template <class LP> void parseObjFileLinkerOption();
   template <class LP> void parseLazy();
   template <class LP> void parseLazyObjFile();
@@ -315,10 +317,12 @@ public:
   bool forceHidden;
 
 private:
+  llvm::once_flag parseFlag;
   void parseLazy();
   void parseLazyObjFile();
 };
 
+extern std::atomic_long lazySymbolCnt;
 extern llvm::SetVector<InputFile *> inputFiles;
 extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
 

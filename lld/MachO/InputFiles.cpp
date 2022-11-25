@@ -101,6 +101,7 @@ std::string lld::toString(const Section &sec) {
   return (toString(sec.file) + ":(" + sec.name + ")").str();
 }
 
+std::atomic_long macho::lazySymbolCnt{0};
 SetVector<InputFile *> macho::inputFiles;
 std::unique_ptr<TarWriter> macho::tar;
 int InputFile::idCount = 0;
@@ -252,16 +253,17 @@ InputFile::InputFile(Kind kind, const InterfaceFile &interface)
     : id(idCount++), fileKind(kind), name(saver().save(interface.getPath())) {}
 
 void InputFile::parseObjCMember() {
-  if (config->forceLoadObjC) {
-    if (lazyArchiveMember.load(std::memory_order_relaxed)) {
-      for (Symbol *sym : symbols)
-        if (sym && sym->getName().startswith(objc::klass)) {
-          extractArchiveMember(*this, "-ObjC");
-          break;
-        }
-      if (lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(mb))
+  if (!config->forceLoadObjC) {
+    return;
+  }
+  if (lazyArchiveMember.load(std::memory_order_relaxed)) {
+    for (Symbol *sym : symbols)
+      if (sym && sym->getName().startswith(objc::klass)) {
         extractArchiveMember(*this, "-ObjC");
-    }
+        break;
+      }
+    if (lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(mb))
+      extractArchiveMember(*this, "-ObjC");
   }
 }
 
@@ -955,6 +957,12 @@ void ObjFile::parseFile() {
   }
   
   parseObjCMember();
+}
+
+void ObjFile::parseOnce() {
+  llvm::call_once(parseFlag, [this]() {
+    parseFile();
+  });
 }
 
 template <class LP> void ObjFile::parse() {
@@ -2192,7 +2200,7 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason, bool
   if (!file)
     return file.takeError();
 
-  (*file)->lazyArchiveMember.store(lazyArchiveMember, std::memory_order_relaxed);
+  (*file)->lazyArchiveMember.store(lazyArchiveMember);
   inputFiles.insert(*file);
   printArchiveMemberLoad(reason, *file);
   return Error::success();
@@ -2282,17 +2290,19 @@ void BitcodeFile::parse() {
 }
 
 void BitcodeFile::parseBitcodeFile() {
-  auto lazyArchive = lazyArchiveMember.load(std::memory_order_relaxed);
-  if (lazy || lazyArchive) {
-    if (lazyArchive)
-      parseLazyObjFile();
+  llvm::call_once(parseFlag, [this](){
+    auto lazyArchive = lazyArchiveMember.load(std::memory_order_relaxed);
+    if (lazy || lazyArchive) {
+      if (lazyArchive)
+        parseLazyObjFile();
+      else
+        parseLazy();
+    }
     else
-      parseLazy();
-  }
-  else
-    parse();
-  
-  parseObjCMember();
+      parse();
+    
+    parseObjCMember();
+  });
 }
 
 void BitcodeFile::parseLazy() {
@@ -2318,8 +2328,6 @@ void BitcodeFile::parseLazyObjFile() {
 }
 
 void macho::extract(InputFile &file, StringRef reason) {
-  if (!file.lazy)
-    return;
   assert(file.lazy);
   file.lazy = false;
   printArchiveMemberLoad(reason, &file);
@@ -2337,9 +2345,7 @@ void macho::extract(InputFile &file, StringRef reason) {
 void macho::extractArchiveMember(InputFile &file, StringRef reason) {
   if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
     return;
-  assert(file.lazyArchiveMember.load(std::memory_order_relaxed));
-  file.lazyArchiveMember.store(false, std::memory_order_relaxed);
-  printArchiveMemberLoad(reason, &file);
+  file.lazyArchiveMember.store(false);
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
     bitcode->parse();
   } else {
