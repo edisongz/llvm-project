@@ -1159,21 +1159,6 @@ static void parseInputFiles() {
       bitcodeFile->parseBitcodeFile();
     }
   }
-  
-  for (InputFile *file : inputFiles) {
-    if ((isa<ObjFile>(file) || isa<BitcodeFile>(file)) &&
-        config->forceLoadObjC) {
-      if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
-        for (Symbol *sym : file->symbols)
-          if (sym && sym->getName().startswith(objc::klass)) {
-            extractArchiveMember(*file, "-ObjC");
-            break;
-          }
-        if (file->lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(file->mb))
-          extractArchiveMember(*file, "-ObjC");
-      }
-    }
-  }
 }
 
 static void gatherInputSections() {
@@ -1804,19 +1789,6 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       }
       return false;
     });
-    
-    int objCnt = 0;
-    for (const auto &file: inputFiles) {
-      if (isa<ObjFile>(file)) {
-        fprintf(stderr, "objfile :%s, archiveName:%s\n", file->getName().data(), file->archiveName.data());
-        ++objCnt;
-      } else if (isa<BitcodeFile>(file)) {
-        fprintf(stderr, "bitcode file :%s, archiveName:%s\n", file->getName().data(), file->archiveName.data());
-      } else if (isa<ArchiveFile>(file)) {
-        fprintf(stderr, "archive file :%s, archiveName:%s\n", file->getName().data(), file->archiveName.data());
-      }
-    }
-    fprintf(stderr, "2 - objfile count:%d/%d\n", objCnt, (int)inputFiles.size());
 
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.

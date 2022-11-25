@@ -251,6 +251,20 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
 InputFile::InputFile(Kind kind, const InterfaceFile &interface)
     : id(idCount++), fileKind(kind), name(saver().save(interface.getPath())) {}
 
+void InputFile::parseObjCMember() {
+  if (config->forceLoadObjC) {
+    if (lazyArchiveMember.load(std::memory_order_relaxed)) {
+      for (Symbol *sym : symbols)
+        if (sym && sym->getName().startswith(objc::klass)) {
+          extractArchiveMember(*this, "-ObjC");
+          break;
+        }
+      if (lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(mb))
+        extractArchiveMember(*this, "-ObjC");
+    }
+  }
+}
+
 // Some sections comprise of fixed-size records, so instead of splitting them at
 // symbol boundaries, we split them based on size. Records are distinct from
 // literals in that they may contain references to other sections, instead of
@@ -939,6 +953,8 @@ void ObjFile::parseFile() {
     else
       parse<ILP32>();
   }
+  
+  parseObjCMember();
 }
 
 template <class LP> void ObjFile::parse() {
@@ -2275,6 +2291,8 @@ void BitcodeFile::parseBitcodeFile() {
   }
   else
     parse();
+  
+  parseObjCMember();
 }
 
 void BitcodeFile::parseLazy() {
@@ -2300,6 +2318,8 @@ void BitcodeFile::parseLazyObjFile() {
 }
 
 void macho::extract(InputFile &file, StringRef reason) {
+  if (!file.lazy)
+    return;
   assert(file.lazy);
   file.lazy = false;
   printArchiveMemberLoad(reason, &file);
@@ -2315,6 +2335,8 @@ void macho::extract(InputFile &file, StringRef reason) {
 }
 
 void macho::extractArchiveMember(InputFile &file, StringRef reason) {
+  if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
+    return;
   assert(file.lazyArchiveMember.load(std::memory_order_relaxed));
   file.lazyArchiveMember.store(false, std::memory_order_relaxed);
   printArchiveMemberLoad(reason, &file);

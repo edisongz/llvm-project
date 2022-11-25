@@ -141,6 +141,8 @@ protected:
         name(mb.getBufferIdentifier()) {}
 
   InputFile(Kind, const llvm::MachO::InterfaceFile &);
+  
+  void parseObjCMember();
 
 private:
   const Kind fileKind;
