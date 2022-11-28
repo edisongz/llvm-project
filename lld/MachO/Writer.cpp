@@ -684,11 +684,10 @@ void Writer::scanRelocations() {
         // treatUndefinedSymbol() can replace sym with a DylibSymbol; re-check.
         if (!isa<Undefined>(sym) && validateSymbolRelocation(sym, isec, r))
           prepareSymbolRelocation(sym, isec, r);
-      } else {
+      } else if (auto *referentIsec = r.referent.dyn_cast<InputSection *>()) {
         // Canonicalize the referent so that later accesses in Writer won't
         // have to worry about it. Perhaps we should do this for Defined::isec
         // too...
-        auto *referentIsec = r.referent.get<InputSection *>();
         r.referent = referentIsec->canonical();
         if (!r.pcrel) {
           if (config->emitChainedFixups)

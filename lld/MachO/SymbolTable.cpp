@@ -60,6 +60,7 @@ struct DuplicateSymbolDiag {
                       const Symbol *sym)
       : src1(src1), src2(src2), sym(sym) {}
 };
+llvm::sys::RWMutex mu;
 SmallVector<DuplicateSymbolDiag> dupSymDiags;
 } // namespace
 
@@ -103,8 +104,11 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
         std::string srcFile1 = toString(defined->getFile());
         std::string srcFile2 = toString(file);
 
-        dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
-                               make_pair(srcLoc2, srcFile2), defined});
+        {
+          std::lock_guard<sys::RWMutex> lock(mu);
+          dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
+                                 make_pair(srcLoc2, srcFile2), defined});
+        }
       }
 
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
@@ -161,6 +165,10 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
     dynsym->reference(refState);
   else if (auto *undefined = dyn_cast<Undefined>(s))
     undefined->refState = std::max(undefined->refState, refState);
+  else if (auto *defined = dyn_cast<Defined>(s)) {
+    if (defined->getFile())
+      extractArchiveMember(*defined->getFile(), s->getName());
+  }
   return s;
 }
 

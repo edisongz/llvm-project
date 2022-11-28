@@ -1176,6 +1176,8 @@ void SymtabSection::emitStabs() {
   InputFile *lastFile = nullptr;
   for (SortingPair &pair : symbolsNeedingStabs) {
     Defined *defined = pair.first;
+    if (!defined->getFile())
+      continue;
     InputSection *isec = defined->isec;
     ObjFile *file = cast<ObjFile>(isec->getFile());
 

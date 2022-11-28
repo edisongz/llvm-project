@@ -159,8 +159,8 @@ void MarkLiveImpl<RecordWhyLive>::markTransitively() {
       for (const Reloc &r : isec->relocs) {
         if (auto *s = r.referent.dyn_cast<Symbol *>())
           addSym(s, entry);
-        else
-          enqueue(r.referent.get<InputSection *>(), r.addend, entry);
+        else if (auto *section = r.referent.dyn_cast<InputSection *>())
+          enqueue(section, r.addend, entry);
       }
       for (Defined *d : getInputSection(entry)->symbols)
         addSym(d, entry);
@@ -253,7 +253,7 @@ void markLive() {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       for (Symbol *sym : objFile->symbols)
         if (auto *defined = dyn_cast_or_null<Defined>(sym))
-          if (!defined->isExternal() && defined->noDeadStrip)
+          if (!defined->isExternal() && defined->noDeadStrip && defined->getFile())
             marker->addSym(defined);
   if (auto *stubBinder =
           dyn_cast_or_null<DylibSymbol>(symtab->find("dyld_stub_binder")))

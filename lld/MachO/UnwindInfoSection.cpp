@@ -216,7 +216,7 @@ void UnwindInfoSectionImpl::prepare() {
   // entries to the GOT. Hence the use of a MapVector for
   // UnwindInfoSection::symbols.
   for (const Defined *d : make_second_range(symbols))
-    if (d->unwindEntry) {
+    if (d->unwindEntry && d->getFile()) {
       if (d->unwindEntry->getName() == section_names::compactUnwind) {
         prepareRelocations(d->unwindEntry);
       } else {
@@ -347,7 +347,7 @@ void UnwindInfoSectionImpl::relocateCompactUnwind(
     CompactUnwindEntry &cu = cuEntries[i];
     const Defined *d = symbolsVec[i].second;
     cu.functionAddress = d->getVA();
-    if (!d->unwindEntry)
+    if (!d->unwindEntry || !d->getFile())
       return;
 
     // If we have DWARF unwind info, create a CU entry that points to it.

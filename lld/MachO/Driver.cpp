@@ -355,12 +355,12 @@ static InputFile *addFile(StringRef path, LoadType loadType,
       }
     }
 
-//    file->addLazySymbols();
+    // load archive lazy member
     {
       Error e = Error::success();
       for (const object::Archive::Child &c : file->getArchive().children(e)) {
-        if (Error e = file->fetch(c, "LazySymbol", true))
-          error(toString(file) + ": " + "LazySymbol" +
+        if (Error e = file->fetch(c, "LazyMember", true))
+          error(toString(file) + ": " + "LazyMember" +
                 " failed to load archive member: " + toString(std::move(e)));
       }
       if (e)
@@ -398,17 +398,6 @@ static InputFile *addFile(StringRef path, LoadType loadType,
     error(path + ": unhandled file type");
   }
   if (newFile && !isa<DylibFile>(newFile)) {
-//    if ((isa<ObjFile>(newFile) || isa<BitcodeFile>(newFile)) && newFile->lazy &&
-//        config->forceLoadObjC) {
-//      for (Symbol *sym : newFile->symbols)
-//        if (sym && sym->getName().startswith(objc::klass)) {
-//          extract(*newFile, "-ObjC");
-//          break;
-//        }
-//      if (newFile->lazy && hasObjCSection(mbref))
-//        extract(*newFile, "-ObjC");
-//    }
-
     // printArchiveMemberLoad() prints both .a and .o names, so no need to
     // print the .a name here. Similarly skip lazy files.
     if (config->printEachFile && magic != file_magic::archive && !isLazy)
@@ -1151,23 +1140,24 @@ static void createFiles(const InputArgList &args) {
 
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
-  lazySymbolCnt.store(0);
-//  for (InputFile *file : inputFiles) {
-//    if (auto *objFile = dyn_cast<ObjFile>(file)) {
-//      objFile->parseFile();
-//    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
-//      bitcodeFile->parseBitcodeFile();
-//    }
-//  }
-  
-  parallelForEach(inputFiles, [](InputFile *file) {
+  // Parse lazy archive symbols
+  for (InputFile *file : inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseOnce();
+      objFile->parseLazyArchiveSymbols();
     } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
-      bitcodeFile->parseBitcodeFile();
+      bitcodeFile->parseLazyArchiveSymbols();
     }
-  });
-  fprintf(stderr, "lazySymbolCnt:%ld\n", lazySymbolCnt.load());
+  }
+  
+  // Parse obj or bitcode files
+  for (InputFile *file : inputFiles) {
+    if (auto *objFile = dyn_cast<ObjFile>(file)) {
+      objFile->parseFileNew();
+    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
+      bitcodeFile->parse();
+    }
+  }
+  std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
 static void gatherInputSections() {
@@ -1791,14 +1781,11 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     initLLVM(); // must be run before any call to addFile()
     createFiles(args);
     parseInputFiles();
-        
-    inputFiles.remove_if([&](const InputFile *file) {
-      if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
-        return true;
-      }
-      return false;
-    });
 
+    inputFiles.remove_if([&](const InputFile *file) {
+      return file->lazyArchiveMember.load(std::memory_order_relaxed);
+    });
+  
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.
     {

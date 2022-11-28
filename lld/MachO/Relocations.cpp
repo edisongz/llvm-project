@@ -23,6 +23,8 @@ static_assert(sizeof(void *) != 8 || sizeof(Reloc) == 24,
 
 bool macho::validateSymbolRelocation(const Symbol *sym,
                                      const InputSection *isec, const Reloc &r) {
+  if (!sym->isLive())
+    return false;
   const RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
   bool valid = true;
   auto message = [&](const Twine &diagnostic) {

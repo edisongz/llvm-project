@@ -116,6 +116,8 @@ public:
   Kind kind() const { return fileKind; }
   StringRef getName() const { return name; }
   static void resetIdCount() { idCount = 0; }
+  void clearSymbols();
+  void parseObjCMember();
 
   MemoryBufferRef mb;
 
@@ -141,8 +143,6 @@ protected:
         name(mb.getBufferIdentifier()) {}
 
   InputFile(Kind, const llvm::MachO::InterfaceFile &);
-  
-  void parseObjCMember();
 
 private:
   const Kind fileKind;
@@ -165,8 +165,10 @@ public:
   ArrayRef<llvm::MachO::data_in_code_entry> getDataInCode() const;
   ArrayRef<uint8_t> getOptimizationHints() const;
   template <class LP> void parse();
+  template <class LP> void parseUndefineds();
   void parseFile();
-  void parseOnce();
+  void parseFileNew();
+  void parseLazyArchiveSymbols();
   
   static bool classof(const InputFile *f) { return f->kind() == ObjKind; }
 
@@ -187,7 +189,7 @@ public:
 
 private:
   llvm::once_flag initDwarf;
-  llvm::once_flag parseFlag;
+  SmallVector<unsigned, 32> undefineds;
   template <class LP> void parseObjFileLinkerOption();
   template <class LP> void parseLazy();
   template <class LP> void parseLazyObjFile();
@@ -312,17 +314,17 @@ public:
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
   void parse();
   void parseBitcodeFile();
-
+  void parseLazyArchiveSymbols();
+  void parseUndefineds();
+  
   std::unique_ptr<llvm::lto::InputFile> obj;
   bool forceHidden;
 
 private:
-  llvm::once_flag parseFlag;
   void parseLazy();
   void parseLazyObjFile();
 };
 
-extern std::atomic_long lazySymbolCnt;
 extern llvm::SetVector<InputFile *> inputFiles;
 extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
 

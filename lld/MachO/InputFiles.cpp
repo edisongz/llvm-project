@@ -101,7 +101,6 @@ std::string lld::toString(const Section &sec) {
   return (toString(sec.file) + ":(" + sec.name + ")").str();
 }
 
-std::atomic_long macho::lazySymbolCnt{0};
 SetVector<InputFile *> macho::inputFiles;
 std::unique_ptr<TarWriter> macho::tar;
 int InputFile::idCount = 0;
@@ -251,6 +250,13 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
 
 InputFile::InputFile(Kind kind, const InterfaceFile &interface)
     : id(idCount++), fileKind(kind), name(saver().save(interface.getPath())) {}
+
+void InputFile::clearSymbols() {
+  for (auto &sym: symbols) {
+    if (sym && sym->getFile() == this)
+      sym->clearFile();
+  }
+}
 
 void InputFile::parseObjCMember() {
   if (!config->forceLoadObjC) {
@@ -788,7 +794,6 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
   // Groups indices of the symbols by the sections that contain them.
   std::vector<std::vector<uint32_t>> symbolsBySection(sections.size());
   symbols.resize(nList.size());
-  SmallVector<unsigned, 32> undefineds;
   for (uint32_t i = 0; i < nList.size(); ++i) {
     const NList &sym = nList[i];
 
@@ -906,8 +911,10 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
   // symbol resolution behavior. In addition, a set of interconnected symbols
   // will all be resolved to the same file, instead of being resolved to
   // different files.
-  for (unsigned i : undefineds)
-    symbols[i] = parseNonSectionSymbol(nList[i], strtab);
+  for (unsigned i : undefineds) {
+    if (!lazyArchiveMember.load(std::memory_order_relaxed))
+      symbols[i] = parseNonSectionSymbol(nList[i], strtab);
+  }
 }
 
 OpaqueFile::OpaqueFile(MemoryBufferRef mb, StringRef segName,
@@ -936,33 +943,35 @@ ObjFile::ObjFile(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
 }
 
 void ObjFile::parseFile() {
-  auto lazyArchive = lazyArchiveMember.load(std::memory_order_relaxed);
-  if (lazy || lazyArchive) {
-    if (lazyArchive) {
-      if (target->wordSize == 8)
-        parseLazyObjFile<LP64>();
-      else
-        parseLazyObjFile<ILP32>();
-    } else {
-      if (target->wordSize == 8)
-        parseLazy<LP64>();
-      else
-        parseLazy<ILP32>();
-    }
+  if (lazyArchiveMember.load(std::memory_order_relaxed)) {
+    if (target->wordSize == 8)
+      parseLazyObjFile<LP64>();
+    else
+      parseLazyObjFile<ILP32>();
   } else {
     if (target->wordSize == 8)
       parse<LP64>();
     else
       parse<ILP32>();
   }
-  
   parseObjCMember();
 }
 
-void ObjFile::parseOnce() {
-  llvm::call_once(parseFlag, [this]() {
-    parseFile();
-  });
+void ObjFile::parseFileNew() {
+  if (target->wordSize == 8)
+    parse<LP64>();
+  else
+    parse<ILP32>();
+}
+
+void ObjFile::parseLazyArchiveSymbols() {
+  if (lazyArchiveMember.load(std::memory_order_relaxed)) {
+    if (target->wordSize == 8)
+      parseLazyObjFile<LP64>();
+    else
+      parseLazyObjFile<ILP32>();
+  }
+  parseObjCMember();
 }
 
 template <class LP> void ObjFile::parse() {
@@ -1100,15 +1109,31 @@ template <class LP> void ObjFile::parseLazyObjFile() {
   ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
                         c->nsyms);
   const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
-  symbols.resize(nList.size());
   for (const auto &[i, sym] : llvm::enumerate(nList)) {
     if ((sym.n_type & N_EXT) && !isUndef(sym)) {
       StringRef name = strtab + sym.n_strx;
-      symbols[i] = symtab->addLazyObjFile(name, this);
+      symtab->addLazyObjFile(name, this);
       if (!lazyArchiveMember.load(std::memory_order_relaxed))
         break;
     }
   }
+}
+
+template <class LP> void ObjFile::parseUndefineds() {
+  using Header = typename LP::mach_header;
+  using NList = typename LP::nlist;
+
+  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
+  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
+  if (!cmd)
+    return;
+  auto *c = reinterpret_cast<const symtab_command *>(cmd);
+  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
+                        c->nsyms);
+  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
+  for (unsigned i : undefineds)
+    symbols[i] = parseNonSectionSymbol(nList[i], strtab);
 }
 
 void ObjFile::parseDebugInfo() {
@@ -2200,7 +2225,7 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason, bool
   if (!file)
     return file.takeError();
 
-  (*file)->lazyArchiveMember.store(lazyArchiveMember);
+  (*file)->lazyArchiveMember.store(lazyArchiveMember, std::memory_order_relaxed);
   inputFiles.insert(*file);
   printArchiveMemberLoad(reason, *file);
   return Error::success();
@@ -2285,24 +2310,38 @@ void BitcodeFile::parse() {
   // "winning" symbol will then be marked as Prevailing at LTO compilation
   // time.
   symbols.clear();
-  for (const lto::InputFile::Symbol &objSym : obj->symbols())
+  for (const lto::InputFile::Symbol &objSym : obj->symbols()) {
+    if (objSym.isUndefined()) {
+      if (lazyArchiveMember.load(std::memory_order_relaxed)) {
+        symbols.push_back(nullptr);
+        continue;
+      }
+    }
     symbols.push_back(createBitcodeSymbol(objSym, *this));
+  }
+  
+  parseObjCMember();
 }
 
 void BitcodeFile::parseBitcodeFile() {
-  llvm::call_once(parseFlag, [this](){
-    auto lazyArchive = lazyArchiveMember.load(std::memory_order_relaxed);
-    if (lazy || lazyArchive) {
-      if (lazyArchive)
-        parseLazyObjFile();
-      else
-        parseLazy();
-    }
-    else
-      parse();
-    
-    parseObjCMember();
-  });
+  if (lazyArchiveMember.load(std::memory_order_relaxed))
+    parseLazyObjFile();
+  else
+    parse();
+  
+  parseObjCMember();
+}
+
+void BitcodeFile::parseLazyArchiveSymbols() {
+  if (lazyArchiveMember.load(std::memory_order_relaxed))
+    parseLazyObjFile();
+}
+
+void BitcodeFile::parseUndefineds() {
+  for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
+    if (objSym.isUndefined())
+      symbols[i] = createBitcodeSymbol(objSym, *this);
+  }
 }
 
 void BitcodeFile::parseLazy() {
@@ -2317,10 +2356,9 @@ void BitcodeFile::parseLazy() {
 }
 
 void BitcodeFile::parseLazyObjFile() {
-  symbols.resize(obj->symbols().size());
   for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
     if (!objSym.isUndefined()) {
-      symbols[i] = symtab->addLazyObjFile(saver().save(objSym.getName()), this);
+      symtab->addLazyObjFile(saver().save(objSym.getName()), this);
       if (!lazyArchiveMember.load(std::memory_order_relaxed))
         break;
     }
@@ -2345,15 +2383,25 @@ void macho::extract(InputFile &file, StringRef reason) {
 void macho::extractArchiveMember(InputFile &file, StringRef reason) {
   if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
     return;
-  file.lazyArchiveMember.store(false);
+  file.lazyArchiveMember.store(false, std::memory_order_relaxed);
+//  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
+//    bitcode->parse();
+//  } else {
+//    auto &f = cast<ObjFile>(file);
+//    if (target->wordSize == 8)
+//      f.parse<LP64>();
+//    else
+//      f.parse<ILP32>();
+//  }
+  
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    bitcode->parse();
+    bitcode->parseUndefineds();
   } else {
     auto &f = cast<ObjFile>(file);
     if (target->wordSize == 8)
-      f.parse<LP64>();
+      f.parseUndefineds<LP64>();
     else
-      f.parse<ILP32>();
+      f.parseUndefineds<ILP32>();
   }
 }
 
