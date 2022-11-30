@@ -22,30 +22,30 @@ using namespace lld;
 using namespace lld::macho;
 
 Symbol *SymbolTable::find(CachedHashStringRef cachedName) {
-  std::shared_lock<sys::RWMutex> symMapGuard(symMapMutex);
-  auto it = symMap.find(cachedName);
-  if (it == symMap.end())
+  typename decltype(symMap)::const_accessor accessor;
+  if (!symMap.find(accessor, cachedName))
     return nullptr;
-  return symVector[it->second];
+  return symVector[accessor->second];
 }
 
 std::pair<Symbol *, bool> SymbolTable::insert(StringRef name,
                                               const InputFile *file) {
-  std::lock_guard<sys::RWMutex> symMapGuard(symMapMutex);
-  auto p = symMap.insert({CachedHashStringRef(name), (int)symVector.size()});
+  typename decltype(symMap)::const_accessor accessor;
 
+  bool result = false;
   Symbol *sym;
-  if (!p.second) {
+  if (symMap.find(accessor, CachedHashStringRef(name))) {
     // Name already present in the symbol table.
-    sym = symVector[p.first->second];
+    sym = symVector[accessor->second];
   } else {
     // Name is a new symbol.
-    sym = reinterpret_cast<Symbol *>(make<SymbolUnion>());
+    sym = reinterpret_cast<Symbol *>(new SymbolUnion());
+    result = symMap.insert(accessor, {CachedHashStringRef(name), (int)symVector.size()});
     symVector.push_back(sym);
   }
 
   sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
-  return {sym, p.second};
+  return {sym, result};
 }
 
 namespace {
@@ -60,7 +60,7 @@ struct DuplicateSymbolDiag {
                       const Symbol *sym)
       : src1(src1), src2(src2), sym(sym) {}
 };
-llvm::sys::RWMutex mu;
+tbb::spin_mutex mu;
 SmallVector<DuplicateSymbolDiag> dupSymDiags;
 } // namespace
 
@@ -105,7 +105,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
         std::string srcFile2 = toString(file);
 
         {
-          std::lock_guard<sys::RWMutex> lock(mu);
+          std::scoped_lock lock(mu);
           dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
                                  make_pair(srcLoc2, srcFile2), defined});
         }

@@ -17,6 +17,10 @@
 #include "llvm/Object/Archive.h"
 #include "llvm/Support/RWMutex.h"
 
+#include <tbb/concurrent_hash_map.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/spin_mutex.h>
+
 namespace lld::macho {
 
 class ArchiveFile;
@@ -28,6 +32,19 @@ class MachHeaderSection;
 class Symbol;
 class Defined;
 class Undefined;
+
+class HashCmp {
+public:
+  static size_t hash(const llvm::CachedHashStringRef &s) {
+    return s.hash();
+  }
+
+  static bool equal(const llvm::CachedHashStringRef &s1,
+                    const llvm::CachedHashStringRef& s2) {
+    return s1.hash() == s2.hash() && s1.size() == s2.size() &&
+           (s1.data() == s2.data() || memcmp(s1.data(), s2.data(), s1.size()) == 0);
+  }
+};
 
 /*
  * Note that the SymbolTable handles name collisions by calling
@@ -63,15 +80,14 @@ public:
                         bool isPrivateExtern, bool includeInSymtab,
                         bool referencedDynamically);
 
-  ArrayRef<Symbol *> getSymbols() const { return symVector; }
+  constexpr tbb::concurrent_vector<Symbol *> &getSymbols() { return symVector; }
   Symbol *find(llvm::CachedHashStringRef name);
   Symbol *find(StringRef name) { return find(llvm::CachedHashStringRef(name)); }
 
 private:
   std::pair<Symbol *, bool> insert(StringRef name, const InputFile *);
-  llvm::sys::RWMutex symMapMutex;
-  llvm::DenseMap<llvm::CachedHashStringRef, int> symMap;
-  std::vector<Symbol *> symVector;
+  tbb::concurrent_hash_map<llvm::CachedHashStringRef, int, HashCmp> symMap;
+  tbb::concurrent_vector<Symbol *> symVector;
 };
 
 void reportPendingUndefinedSymbols();
