@@ -165,10 +165,6 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
     dynsym->reference(refState);
   else if (auto *undefined = dyn_cast<Undefined>(s))
     undefined->refState = std::max(undefined->refState, refState);
-  else if (auto *defined = dyn_cast<Defined>(s)) {
-    if (defined->getFile())
-      extractArchiveMember(*defined->getFile(), s->getName());
-  }
   return s;
 }
 

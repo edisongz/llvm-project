@@ -1140,21 +1140,12 @@ static void createFiles(const InputArgList &args) {
 
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
-  // Parse lazy archive symbols
-  for (InputFile *file : inputFiles) {
-    if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseLazyArchiveSymbols();
-    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
-      bitcodeFile->parseLazyArchiveSymbols();
-    }
-  }
-  
   // Parse obj or bitcode files
   for (InputFile *file : inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseFileNew();
+      objFile->parseFile();
     } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
-      bitcodeFile->parse();
+      bitcodeFile->parseBitcodeFile();
     }
   }
   std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -1786,6 +1777,8 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
       return file->lazyArchiveMember.load(std::memory_order_relaxed);
     });
   
+    fprintf(stderr, "file count:%d, sym count:%d\n", (int)inputFiles.size(), (int)symtab->getSymbols().size());
+    
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.
     {

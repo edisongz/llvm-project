@@ -2384,24 +2384,14 @@ void macho::extractArchiveMember(InputFile &file, StringRef reason) {
   if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
     return;
   file.lazyArchiveMember.store(false, std::memory_order_relaxed);
-//  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-//    bitcode->parse();
-//  } else {
-//    auto &f = cast<ObjFile>(file);
-//    if (target->wordSize == 8)
-//      f.parse<LP64>();
-//    else
-//      f.parse<ILP32>();
-//  }
-  
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    bitcode->parseUndefineds();
+    bitcode->parse();
   } else {
     auto &f = cast<ObjFile>(file);
     if (target->wordSize == 8)
-      f.parseUndefineds<LP64>();
+      f.parse<LP64>();
     else
-      f.parseUndefineds<ILP32>();
+      f.parse<ILP32>();
   }
 }
 
