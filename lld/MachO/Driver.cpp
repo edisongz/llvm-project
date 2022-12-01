@@ -1776,8 +1776,6 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     inputFiles.remove_if([&](const InputFile *file) {
       return file->lazyArchiveMember.load(std::memory_order_relaxed);
     });
-  
-    fprintf(stderr, "file count:%d, sym count:%d\n", (int)inputFiles.size(), (int)symtab->getSymbols().size());
     
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.
