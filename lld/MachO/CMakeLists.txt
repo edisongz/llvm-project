@@ -3,8 +3,14 @@ tablegen(LLVM Options.inc -gen-opt-parser-defs)
 add_public_tablegen_target(MachOOptionsTableGen)
 
 include_directories(${LLVM_MAIN_SRC_DIR}/../libunwind/include)
+
+# use onetbb for concurrent symtab
 add_library(libtbb STATIC IMPORTED)
 set_target_properties(libtbb PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../lib/libtbb.a)
+
+# use mimalloc for create huge number of input files
+add_library(libmimalloc STATIC IMPORTED)
+set_target_properties(libmimalloc PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../lib/libmimalloc.a)
 
 add_lld_library(lldMachO
   Arch/ARM.cpp
@@ -63,5 +69,5 @@ add_lld_library(lldMachO
   )
 
 if(LLVM_HAVE_LIBXAR)
-  target_link_libraries(lldMachO PRIVATE ${XAR_LIB} libtbb)
+  target_link_libraries(lldMachO PRIVATE ${XAR_LIB} libtbb libmimalloc)
 endif()
