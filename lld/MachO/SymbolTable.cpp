@@ -78,6 +78,20 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   if (!wasInserted) {
     if (auto *defined = dyn_cast<Defined>(s)) {
       if (isWeakDef) {
+        if (s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
+            !file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+          // Previous lazy archiver member will replace by defined symbol
+          bool interposable = config->namespaceKind == NamespaceKind::flat &&
+                              config->outputType != MachO::MH_EXECUTE &&
+                              !isPrivateExtern;
+          Defined *defined = replaceSymbol<Defined>(
+              s, name, file, isec, value, size, isWeakDef, /*isExternal=*/true,
+              isPrivateExtern, /*includeInSymtab=*/true, isThumb,
+              isReferencedDynamically, noDeadStrip, overridesWeakDef,
+              isWeakDefCanBeHidden, interposable);
+          return defined;
+        }
+        
         // See further comment in createDefined() in InputFiles.cpp
         if (defined->isWeakDef()) {
           defined->privateExtern &= isPrivateExtern;
@@ -98,6 +112,12 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
           concatIsec->wasCoalesced = true;
           concatIsec->symbols.erase(llvm::find(concatIsec->symbols, defined));
         }
+      } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        // Defined symbols take priority over lazy archiver member
+        return new Defined(name, file, isec, value, size, isWeakDef,
+                           /*isExternal=*/false, isPrivateExtern,
+                           /*includeInSymtab=*/false, isThumb,
+                           isReferencedDynamically, noDeadStrip);
       } else {
         std::string srcLoc1 = defined->getSourceLocation();
         std::string srcLoc2 = isec ? isec->getSourceLocation(value) : "";
@@ -114,6 +134,13 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
       overridesWeakDef = !isWeakDef && dysym->isWeakDef();
       dysym->unreference();
+      if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        // Dylib symbols take priority over lazy archiver member
+        return new Defined(name, file, isec, value, size, isWeakDef,
+                           /*isExternal=*/false, /*isPrivateExtern=*/false,
+                           /*includeInSymtab=*/false, isThumb,
+                           /*isReferencedDynamically=*/true, noDeadStrip);
+      }
     } else if (auto *undef = dyn_cast<Undefined>(s)) {
       // Preserve the original bitcode file name (instead of using the object
       // file name).
@@ -165,6 +192,10 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
     dynsym->reference(refState);
   else if (auto *undefined = dyn_cast<Undefined>(s))
     undefined->refState = std::max(undefined->refState, refState);
+  else if (auto *defined = dyn_cast<Defined>(s)) {
+    if (defined->getFile())
+      extractArchiveMember(*defined->getFile(), s->getName());
+  }
   return s;
 }
 

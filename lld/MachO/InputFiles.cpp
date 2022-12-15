@@ -1132,8 +1132,10 @@ template <class LP> void ObjFile::parseUndefineds() {
   ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
                         c->nsyms);
   const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
-  for (unsigned i : undefineds)
-    symbols[i] = parseNonSectionSymbol(nList[i], strtab);
+  for (unsigned i : undefineds) {
+    if (!symbols[i])
+      symbols[i] = parseNonSectionSymbol(nList[i], strtab);
+  }
 }
 
 void ObjFile::parseDebugInfo() {
@@ -2384,14 +2386,24 @@ void macho::extractArchiveMember(InputFile &file, StringRef reason) {
   if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
     return;
   file.lazyArchiveMember.store(false, std::memory_order_relaxed);
+//  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
+//    bitcode->parse();
+//  } else {
+//    auto &f = cast<ObjFile>(file);
+//    if (target->wordSize == 8)
+//      f.parse<LP64>();
+//    else
+//      f.parse<ILP32>();
+//  }
+  
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    bitcode->parse();
+    bitcode->parseUndefineds();
   } else {
     auto &f = cast<ObjFile>(file);
     if (target->wordSize == 8)
-      f.parse<LP64>();
+      f.parseUndefineds<LP64>();
     else
-      f.parse<ILP32>();
+      f.parseUndefineds<ILP32>();
   }
 }
 

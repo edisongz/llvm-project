@@ -1140,12 +1140,21 @@ static void createFiles(const InputArgList &args) {
 
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
+  // Parse lazy archive symbols
+  for (InputFile *file : inputFiles) {
+    if (auto *objFile = dyn_cast<ObjFile>(file)) {
+      objFile->parseLazyArchiveSymbols();
+    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
+      bitcodeFile->parseLazyArchiveSymbols();
+    }
+  }
+  
   // Parse obj or bitcode files
   for (InputFile *file : inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseFile();
+      objFile->parseFileNew();
     } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
-      bitcodeFile->parseBitcodeFile();
+      bitcodeFile->parse();
     }
   }
   std::atomic_thread_fence(std::memory_order_seq_cst);
