@@ -972,12 +972,13 @@ ExportSection::ExportSection()
 
 void ExportSection::finalizeContents() {
   trieBuilder.setImageBase(in.header->addr);
-  for (const Symbol *sym : symtab->getSymbols()) {
-    if (const auto *defined = dyn_cast<Defined>(sym)) {
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter) {
+    if (const auto *defined = dyn_cast<Defined>(iter->second)) {
       if (defined->privateExtern || !defined->isLive())
         continue;
       trieBuilder.addSymbol(*defined);
-      hasWeakSymbol = hasWeakSymbol || sym->isWeakDef();
+      hasWeakSymbol = hasWeakSymbol || iter->second->isWeakDef();
     }
   }
   size = trieBuilder.build();
@@ -1262,10 +1263,11 @@ void SymtabSection::finalizeContents() {
   if (in.stubHelper && in.stubHelper->dyldPrivate)
     localSymbolsHandler(in.stubHelper->dyldPrivate);
 
-  for (Symbol *sym : symtab->getSymbols()) {
-    if (!sym->isLive())
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter) {
+    if (!iter->second->isLive())
       continue;
-    if (auto *defined = dyn_cast<Defined>(sym)) {
+    if (auto *defined = dyn_cast<Defined>(iter->second)) {
       if (!defined->includeInSymtab)
         continue;
       assert(defined->isExternal());
@@ -1273,9 +1275,9 @@ void SymtabSection::finalizeContents() {
         localSymbolsHandler(defined);
       else
         addSymbol(externalSymbols, defined);
-    } else if (auto *dysym = dyn_cast<DylibSymbol>(sym)) {
+    } else if (auto *dysym = dyn_cast<DylibSymbol>(iter->second)) {
       if (dysym->isReferenced())
-        addSymbol(undefinedSymbols, sym);
+        addSymbol(undefinedSymbols, iter->second);
     }
   }
 

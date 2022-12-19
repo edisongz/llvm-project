@@ -51,6 +51,7 @@
 #include "llvm/TextAPI/PackedVersion.h"
 
 #include <algorithm>
+#include <tbb/parallel_for_each.h>
 
 using namespace llvm;
 using namespace llvm::MachO;
@@ -556,8 +557,9 @@ static bool compileBitcodeFiles() {
 static void replaceCommonSymbols() {
   TimeTraceScope timeScope("Replace common symbols");
   ConcatOutputSection *osec = nullptr;
-  for (Symbol *sym : symtab->getSymbols()) {
-    auto *common = dyn_cast<CommonSymbol>(sym);
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter) {
+    auto *common = dyn_cast<CommonSymbol>(iter->second);
     if (common == nullptr)
       continue;
 
@@ -578,7 +580,8 @@ static void replaceCommonSymbols() {
     // FIXME: CommonSymbol should store isReferencedDynamically, noDeadStrip
     // and pass them on here.
     replaceSymbol<Defined>(
-        sym, sym->getName(), common->getFile(), isec, /*value=*/0, common->size,
+        iter->second, iter->second->getName(), common->getFile(), isec,
+        /*value=*/0, common->size,
         /*isWeakDef=*/false, /*isExternal=*/true, common->privateExtern,
         /*includeInSymtab=*/true, /*isThumb=*/false,
         /*isReferencedDynamically=*/false, /*noDeadStrip=*/false);
@@ -1157,7 +1160,11 @@ static void parseInputFiles() {
       bitcodeFile->parse();
     }
   }
+  
   std::atomic_thread_fence(std::memory_order_seq_cst);
+  inputFiles.remove_if([&](const InputFile *file) {
+    return file->lazyArchiveMember.load(std::memory_order_relaxed);
+  });
 }
 
 static void gatherInputSections() {
@@ -1226,10 +1233,11 @@ static void addSynthenticMethnames() {
   std::string &data = *make<std::string>();
   llvm::raw_string_ostream os(data);
   const int prefixLength = ObjCStubsSection::symbolPrefix.size();
-  for (Symbol *sym : symtab->getSymbols())
-    if (isa<Undefined>(sym))
-      if (sym->getName().startswith(ObjCStubsSection::symbolPrefix))
-        os << sym->getName().drop_front(prefixLength) << '\0';
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter)
+    if (isa<Undefined>(iter->second))
+      if (iter->second->getName().startswith(ObjCStubsSection::symbolPrefix))
+        os << iter->second->getName().drop_front(prefixLength) << '\0';
 
   if (data.empty())
     return;
@@ -1311,8 +1319,9 @@ static void createAliases() {
 
 static void handleExplicitExports() {
   if (config->hasExplicitExports) {
-    parallelForEach(symtab->getSymbols(), [](Symbol *sym) {
-      if (auto *defined = dyn_cast<Defined>(sym)) {
+    for (auto iter = symtab->getSymbols().begin();
+         iter != symtab->getSymbols().end(); ++iter) {
+      if (auto *defined = dyn_cast<Defined>(iter->second)) {
         StringRef symbolName = defined->getName();
         if (config->exportedSymbols.match(symbolName)) {
           if (defined->privateExtern) {
@@ -1331,13 +1340,14 @@ static void handleExplicitExports() {
           defined->privateExtern = true;
         }
       }
-    });
+    }
   } else if (!config->unexportedSymbols.empty()) {
-    parallelForEach(symtab->getSymbols(), [](Symbol *sym) {
-      if (auto *defined = dyn_cast<Defined>(sym))
+    for (auto iter = symtab->getSymbols().begin();
+         iter != symtab->getSymbols().end(); ++iter) {
+      if (auto *defined = dyn_cast<Defined>(iter->second))
         if (config->unexportedSymbols.match(defined->getName()))
           defined->privateExtern = true;
-    });
+    }
   }
 }
 
@@ -1782,10 +1792,6 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     createFiles(args);
     parseInputFiles();
 
-    inputFiles.remove_if([&](const InputFile *file) {
-      return file->lazyArchiveMember.load(std::memory_order_relaxed);
-    });
-    
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.
     {

@@ -711,8 +711,9 @@ static void addNonWeakDefinition(const Defined *defined) {
 
 void Writer::scanSymbols() {
   TimeTraceScope timeScope("Scan symbols");
-  for (Symbol *sym : symtab->getSymbols()) {
-    if (auto *defined = dyn_cast<Defined>(sym)) {
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter) {
+    if (auto *defined = dyn_cast<Defined>(iter->second)) {
       if (!defined->isLive())
         continue;
       defined->canonicalize();
@@ -720,15 +721,15 @@ void Writer::scanSymbols() {
         addNonWeakDefinition(defined);
       if (!defined->isAbsolute() && isCodeSection(defined->isec))
         in.unwindInfo->addSymbol(defined);
-    } else if (const auto *dysym = dyn_cast<DylibSymbol>(sym)) {
+    } else if (const auto *dysym = dyn_cast<DylibSymbol>(iter->second)) {
       // This branch intentionally doesn't check isLive().
       if (dysym->isDynamicLookup())
         continue;
       dysym->getFile()->refState =
           std::max(dysym->getFile()->refState, dysym->getRefState());
-    } else if (isa<Undefined>(sym)) {
-      if (sym->getName().startswith(ObjCStubsSection::symbolPrefix))
-        in.objcStubs->addEntry(sym);
+    } else if (isa<Undefined>(iter->second)) {
+      if (iter->second->getName().startswith(ObjCStubsSection::symbolPrefix))
+        in.objcStubs->addEntry(iter->second);
     }
   }
 

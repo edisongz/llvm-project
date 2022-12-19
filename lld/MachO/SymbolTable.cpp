@@ -17,6 +17,8 @@
 #include "lld/Common/Memory.h"
 #include "llvm/Demangle/Demangle.h"
 
+#include <tbb/spin_mutex.h>
+
 using namespace llvm;
 using namespace lld;
 using namespace lld::macho;
@@ -25,7 +27,7 @@ Symbol *SymbolTable::find(CachedHashStringRef cachedName) {
   typename decltype(symMap)::const_accessor accessor;
   if (!symMap.find(accessor, cachedName))
     return nullptr;
-  return symVector[accessor->second];
+  return accessor->second;
 }
 
 std::pair<Symbol *, bool> SymbolTable::insert(StringRef name,
@@ -36,12 +38,11 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name,
   Symbol *sym;
   if (symMap.find(accessor, CachedHashStringRef(name))) {
     // Name already present in the symbol table.
-    sym = symVector[accessor->second];
+    sym = accessor->second;
   } else {
     // Name is a new symbol.
     sym = reinterpret_cast<Symbol *>(new SymbolUnion());
-    result = symMap.insert(accessor, {CachedHashStringRef(name), (int)symVector.size()});
-    symVector.push_back(sym);
+    result = symMap.insert(accessor, {CachedHashStringRef(name), sym});
   }
 
   sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
@@ -78,7 +79,8 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   if (!wasInserted) {
     if (auto *defined = dyn_cast<Defined>(s)) {
       if (isWeakDef) {
-        if (s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
+        if (s->getFile() &&
+            s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
             !file->lazyArchiveMember.load(std::memory_order_relaxed)) {
           // Previous lazy archiver member will replace by defined symbol
           bool interposable = config->namespaceKind == NamespaceKind::flat &&
@@ -439,7 +441,7 @@ struct UndefinedDiag {
 };
 
 MapVector<const Undefined *, UndefinedDiag> undefs;
-}
+} // namespace
 
 void macho::reportPendingDuplicateSymbols() {
   for (const auto &duplicate : dupSymDiags) {
@@ -541,10 +543,11 @@ static const Symbol *getAlternativeSpelling(const Undefined &sym,
   for (auto &it : map)
     if (name.equals_insensitive(it.first))
       return it.second;
-  for (Symbol *sym : symtab->getSymbols())
-    if (dyn_cast<Undefined>(sym) == nullptr &&
-        name.equals_insensitive(sym->getName()))
-      return sym;
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter)
+    if (dyn_cast<Undefined>(iter->second) == nullptr &&
+        name.equals_insensitive(iter->second->getName()))
+      return iter->second;
 
   // The reference may be a mangled name while the definition is not. Suggest a
   // missing extern "C".
@@ -570,9 +573,11 @@ static const Symbol *getAlternativeSpelling(const Undefined &sym,
         break;
       }
     if (!s)
-      for (Symbol *sym : symtab->getSymbols())
-        if (canSuggestExternCForCXX(name_without_underscore, sym->getName())) {
-          s = sym;
+      for (auto iter = symtab->getSymbols().begin();
+           iter != symtab->getSymbols().end(); ++iter)
+        if (canSuggestExternCForCXX(name_without_underscore,
+                                    iter->second->getName())) {
+          s = iter->second;
           break;
         }
     if (s) {

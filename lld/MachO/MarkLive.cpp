@@ -210,8 +210,9 @@ void markLive() {
   // Add GC roots.
   if (config->entry)
     marker->addSym(config->entry);
-  for (Symbol *sym : symtab->getSymbols()) {
-    if (auto *defined = dyn_cast<Defined>(sym)) {
+  for (auto iter = symtab->getSymbols().begin();
+       iter != symtab->getSymbols().end(); ++iter) {
+    if (auto *defined = dyn_cast<Defined>(iter->second)) {
       // -exported_symbol(s_list)
       if (!config->exportedSymbols.empty() &&
           config->exportedSymbols.match(defined->getName())) {
