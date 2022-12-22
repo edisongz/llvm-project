@@ -69,5 +69,7 @@ add_lld_library(lldMachO
   )
 
 if(LLVM_HAVE_LIBXAR)
-  target_link_libraries(lldMachO PRIVATE ${XAR_LIB} libtbb libmimalloc)
+  target_link_libraries(lldMachO PRIVATE ${XAR_LIB})
 endif()
+
+target_link_libraries(lldMachO PRIVATE libtbb libmimalloc)
