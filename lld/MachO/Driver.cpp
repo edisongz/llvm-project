@@ -1144,13 +1144,13 @@ static void createFiles(const InputArgList &args) {
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
   // Parse lazy archive symbols
-  for (InputFile *file : inputFiles) {
+  parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
       objFile->parseLazyArchiveSymbols();
     } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
       bitcodeFile->parseLazyArchiveSymbols();
     }
-  }
+  });
   
   // Parse obj or bitcode files
   for (InputFile *file : inputFiles) {
