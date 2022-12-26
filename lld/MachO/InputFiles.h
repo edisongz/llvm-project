@@ -165,7 +165,8 @@ public:
   ArrayRef<llvm::MachO::data_in_code_entry> getDataInCode() const;
   ArrayRef<uint8_t> getOptimizationHints() const;
   template <class LP> void parse();
-  template <class LP> void parseUndefineds();
+  template <class LP> void parseSymbols();
+  template <class LP> void parseRelocations();
   void parseFile();
   void parseFileNew();
   void parseLazyArchiveSymbols();

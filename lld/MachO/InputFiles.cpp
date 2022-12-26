@@ -1007,6 +1007,9 @@ template <class LP> void ObjFile::parse() {
         reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
     parseSections(sectionHeaders);
   }
+  
+  if (lazyArchiveMember.load(std::memory_order_relaxed))
+    return;
 
   // TODO: Error on missing LC_SYMTAB?
   if (const load_command *cmd = findCommand(hdr, LC_SYMTAB)) {
@@ -1025,6 +1028,43 @@ template <class LP> void ObjFile::parse() {
       parseRelocations(sectionHeaders, sectionHeaders[i], *sections[i]);
 
   parseDebugInfo();
+
+  Section *ehFrameSection = nullptr;
+  Section *compactUnwindSection = nullptr;
+  for (Section *sec : sections) {
+    Section **s = StringSwitch<Section **>(sec->name)
+                      .Case(section_names::compactUnwind, &compactUnwindSection)
+                      .Case(section_names::ehFrame, &ehFrameSection)
+                      .Default(nullptr);
+    if (s)
+      *s = sec;
+  }
+  if (compactUnwindSection)
+    registerCompactUnwind(*compactUnwindSection);
+  if (ehFrameSection)
+    registerEhFrames(*ehFrameSection);
+}
+
+template <class LP> void ObjFile::parseRelocations() {
+  using Header = typename LP::mach_header;
+  using SegmentCommand = typename LP::segment_command;
+  using SectionHeader = typename LP::section;
+  using NList = typename LP::nlist;
+
+  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+
+  ArrayRef<SectionHeader> sectionHeaders;
+  if (const load_command *cmd = findCommand(hdr, LP::segmentLCType)) {
+    auto *c = reinterpret_cast<const SegmentCommand *>(cmd);
+    sectionHeaders = ArrayRef<SectionHeader>{
+        reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
+  }
+  
+  // The relocations may refer to the symbols, so we parse them after we have
+  // parsed all the symbols.
+  for (size_t i = 0, n = sections.size(); i < n; ++i)
+    if (!sections[i]->subsections.empty())
+      parseRelocations(sectionHeaders, sectionHeaders[i], *sections[i]);
 
   Section *ehFrameSection = nullptr;
   Section *compactUnwindSection = nullptr;
@@ -1119,22 +1159,33 @@ template <class LP> void ObjFile::parseLazyObjFile() {
   }
 }
 
-template <class LP> void ObjFile::parseUndefineds() {
+template <class LP> void ObjFile::parseSymbols() {
+  if (sections.empty())
+    return;
+  
   using Header = typename LP::mach_header;
+  using SegmentCommand = typename LP::segment_command;
+  using SectionHeader = typename LP::section;
   using NList = typename LP::nlist;
 
   auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
   auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
-  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
-  if (!cmd)
-    return;
-  auto *c = reinterpret_cast<const symtab_command *>(cmd);
-  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
-                        c->nsyms);
-  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
-  for (unsigned i : undefineds) {
-    if (!symbols[i])
-      symbols[i] = parseNonSectionSymbol(nList[i], strtab);
+
+  ArrayRef<SectionHeader> sectionHeaders;
+  if (const load_command *cmd = findCommand(hdr, LP::segmentLCType)) {
+    auto *c = reinterpret_cast<const SegmentCommand *>(cmd);
+    sectionHeaders = ArrayRef<SectionHeader>{
+        reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
+  }
+
+  // TODO: Error on missing LC_SYMTAB?
+  if (const load_command *cmd = findCommand(hdr, LC_SYMTAB)) {
+    auto *c = reinterpret_cast<const symtab_command *>(cmd);
+    ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
+                          c->nsyms);
+    const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
+    bool subsectionsViaSymbols = hdr->flags & MH_SUBSECTIONS_VIA_SYMBOLS;
+    parseSymbols<LP>(sectionHeaders, nList, strtab, subsectionsViaSymbols);
   }
 }
 
@@ -2400,10 +2451,13 @@ void macho::extractArchiveMember(InputFile &file, StringRef reason) {
     bitcode->parseUndefineds();
   } else {
     auto &f = cast<ObjFile>(file);
-    if (target->wordSize == 8)
-      f.parseUndefineds<LP64>();
-    else
-      f.parseUndefineds<ILP32>();
+    if (target->wordSize == 8) {
+      f.parseSymbols<LP64>();
+      f.parseRelocations<LP64>();
+    } else {
+      f.parseSymbols<ILP32>();
+      f.parseRelocations<ILP32>();
+    }
   }
 }
 
