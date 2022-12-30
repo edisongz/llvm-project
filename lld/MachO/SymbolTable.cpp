@@ -79,8 +79,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   if (!wasInserted) {
     if (auto *defined = dyn_cast<Defined>(s)) {
       if (isWeakDef) {
-        if (s->getFile() &&
-            s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
+        if (s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
             !file->lazyArchiveMember.load(std::memory_order_relaxed)) {
           // Previous lazy archiver member will replace by defined symbol
           bool interposable = config->namespaceKind == NamespaceKind::flat &&
@@ -93,7 +92,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
               isWeakDefCanBeHidden, interposable);
           return defined;
         }
-        
+
         // See further comment in createDefined() in InputFiles.cpp
         if (defined->isWeakDef()) {
           defined->privateExtern &= isPrivateExtern;
@@ -115,24 +114,29 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
           concatIsec->symbols.erase(llvm::find(concatIsec->symbols, defined));
         }
       } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
-        // Defined symbols take priority over lazy archiver member
-        return new Defined(name, file, isec, value, size, isWeakDef,
-                           /*isExternal=*/false, isPrivateExtern,
-                           /*includeInSymtab=*/false, isThumb,
-                           isReferencedDynamically, noDeadStrip);
-      } else {
-        std::string srcLoc1 = defined->getSourceLocation();
-        std::string srcLoc2 = isec ? isec->getSourceLocation(value) : "";
-        std::string srcFile1 = toString(defined->getFile());
-        std::string srcFile2 = toString(file);
-
-        {
-          std::scoped_lock lock(mu);
-          dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
-                                 make_pair(srcLoc2, srcFile2), defined});
+        if (defined->getFile()->lazyArchiveMember.load(
+                std::memory_order_relaxed)) {
+          if (file->priority < defined->getFile()->priority) {
+            // Defined symbols take priority over lazy archiver member
+            return new Defined(name, file, isec, value, size, isWeakDef,
+                               /*isExternal=*/false, isPrivateExtern,
+                               /*includeInSymtab=*/false, isThumb,
+                               isReferencedDynamically, noDeadStrip);
+          }
         }
+      } else {
+        //        std::string srcLoc1 = defined->getSourceLocation();
+        //        std::string srcLoc2 = isec ? isec->getSourceLocation(value) :
+        //        ""; std::string srcFile1 = toString(defined->getFile());
+        //        std::string srcFile2 = toString(file);
+        //
+        //        {
+        //          std::scoped_lock lock(mu);
+        //          dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
+        //                                 make_pair(srcLoc2, srcFile2),
+        //                                 defined});
+        //        }
       }
-
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
       overridesWeakDef = !isWeakDef && dysym->isWeakDef();
       dysym->unreference();
@@ -166,6 +170,41 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   return defined;
 }
 
+Defined *SymbolTable::addDefinedEager(
+    StringRef name, InputFile *file, InputSection *isec, uint64_t value,
+    uint64_t size, bool isWeakDef, bool isPrivateExtern, bool isThumb,
+    bool isReferencedDynamically, bool noDeadStrip, bool isWeakDefCanBeHidden) {
+  bool overridesWeakDef = false;
+  bool interposable = config->namespaceKind == NamespaceKind::flat &&
+                      config->outputType != MachO::MH_EXECUTE &&
+                      !isPrivateExtern;
+  Symbol *s = find(name);
+  if (s) {
+    if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
+      overridesWeakDef = !isWeakDef && dysym->isWeakDef();
+    } else if (auto *undef = dyn_cast<Undefined>(s)) {
+      // Preserve the original bitcode file name (instead of using the object
+      // file name).
+      if (undef->wasBitcodeSymbol)
+        file = undef->getFile();
+      return replaceSymbol<Defined>(
+          s, name, file, isec, value, size, isWeakDef, /*isExternal=*/true,
+          isPrivateExtern, /*includeInSymtab=*/true, isThumb,
+          isReferencedDynamically, noDeadStrip, overridesWeakDef,
+          isWeakDefCanBeHidden, interposable);
+    }
+  }
+  auto *defined = new Defined(
+      name, file, isec, value, size, isWeakDef,
+      /*isExternal=*/true, isPrivateExtern,
+      /*includeInSymtab=*/true, isThumb, isReferencedDynamically, noDeadStrip,
+      overridesWeakDef, isWeakDefCanBeHidden, interposable);
+  defined->isUsedInRegularObj |= !file || isa<ObjFile>(file);
+  typename decltype(symMap)::const_accessor accessor;
+  symMap.insert(accessor, {CachedHashStringRef(name), defined});
+  return defined;
+}
+
 Defined *SymbolTable::aliasDefined(Defined *src, StringRef target,
                                    InputFile *newFile, bool makePrivateExtern) {
   bool isPrivateExtern = makePrivateExtern || src->privateExtern;
@@ -188,17 +227,22 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
     lazy->fetchArchiveMember();
   else if (isa<LazyObject>(s))
     extract(*s->getFile(), s->getName());
-  else if (isa<LazyObjFile>(s))
-    extractArchiveMember(*s->getFile(), s->getName());
   else if (auto *dynsym = dyn_cast<DylibSymbol>(s))
     dynsym->reference(refState);
   else if (auto *undefined = dyn_cast<Undefined>(s))
     undefined->refState = std::max(undefined->refState, refState);
-  else if (auto *defined = dyn_cast<Defined>(s)) {
-    if (defined->getFile())
-      extractArchiveMember(*defined->getFile(), s->getName());
-  }
   return s;
+}
+
+void SymbolTable::markLive(StringRef name, InputFile *file) {
+  if (file->lazyArchiveMember.load(std::memory_order_relaxed))
+    return;
+  auto [s, wasInserted] = insert(name, file);
+
+  if (auto *defined = dyn_cast<Defined>(s)) {
+    if (defined->getFile())
+      fastMarkLiveFile(*defined->getFile(), s->getName());
+  }
 }
 
 Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
@@ -296,11 +340,11 @@ Symbol *SymbolTable::addLazyObjFile(StringRef name, InputFile *file) {
   if (wasInserted) {
     replaceSymbol<LazyObjFile>(s, file, name);
   } else if (isa<Undefined>(s)) {
-    extractArchiveMember(*file, name);
+    fastMarkLiveFile(*file, name);
   } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
     if (dysym->isWeakDef()) {
       if (dysym->getRefState() != RefState::Unreferenced)
-        extractArchiveMember(*file, name);
+        fastMarkLiveFile(*file, name);
       else
         replaceSymbol<LazyObjFile>(s, file, name);
     }

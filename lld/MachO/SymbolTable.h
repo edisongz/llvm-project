@@ -59,11 +59,17 @@ public:
                       bool isPrivateExtern, bool isThumb,
                       bool isReferencedDynamically, bool noDeadStrip,
                       bool isWeakDefCanBeHidden);
+  Defined *addDefinedEager(StringRef name, InputFile *, InputSection *,
+                           uint64_t value, uint64_t size, bool isWeakDef,
+                           bool isPrivateExtern, bool isThumb,
+                           bool isReferencedDynamically, bool noDeadStrip,
+                           bool isWeakDefCanBeHidden);
 
   Defined *aliasDefined(Defined *src, StringRef target, InputFile *newFile,
                         bool makePrivateExtern = false);
 
   Symbol *addUndefined(StringRef name, InputFile *, bool isWeakRef);
+  void markLive(StringRef name, InputFile *file);
 
   Symbol *addCommon(StringRef name, InputFile *, uint64_t size, uint32_t align,
                     bool isPrivateExtern);

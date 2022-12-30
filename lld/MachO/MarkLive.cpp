@@ -110,6 +110,11 @@ void MarkLiveImpl<RecordWhyLive>::addSym(
     if (!config->whyLive.empty() && config->whyLive.match(s->getName()))
       printWhyLive(s, prev);
   if (auto *d = dyn_cast<Defined>(s)) {
+    if (d->isec && d->isec->getFile() &&
+        d->isec->getFile()->lazyArchiveMember.load(std::memory_order_relaxed)) {
+      s->used = false;
+      return;
+    }
     if (d->isec)
       enqueue(d->isec, d->value, prev);
     if (d->unwindEntry)

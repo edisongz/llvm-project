@@ -252,7 +252,7 @@ InputFile::InputFile(Kind kind, const InterfaceFile &interface)
     : id(idCount++), fileKind(kind), name(saver().save(interface.getPath())) {}
 
 void InputFile::clearSymbols() {
-  for (auto &sym: symbols) {
+  for (auto &sym : symbols) {
     if (sym && sym->getFile() == this)
       sym->clearFile();
   }
@@ -265,11 +265,12 @@ void InputFile::parseObjCMember() {
   if (lazyArchiveMember.load(std::memory_order_relaxed)) {
     for (Symbol *sym : symbols)
       if (sym && sym->getName().startswith(objc::klass)) {
-        extractArchiveMember(*this, "-ObjC");
+        if (lazyArchiveMember.load(std::memory_order_relaxed))
+          lazyArchiveMember.store(false, std::memory_order_relaxed);
         break;
       }
     if (lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(mb))
-      extractArchiveMember(*this, "-ObjC");
+      lazyArchiveMember.store(false, std::memory_order_relaxed);
   }
 }
 
@@ -350,8 +351,8 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
       Subsections &subsections = section.subsections;
       subsections.reserve(data.size() / recordSize);
       for (uint64_t off = 0; off < data.size(); off += recordSize) {
-        auto *isec = new ConcatInputSection(
-            section, data.slice(off, recordSize), align);
+        auto *isec =
+            new ConcatInputSection(section, data.slice(off, recordSize), align);
         subsections.push_back({off, isec});
       }
       section.doneSplitting = true;
@@ -368,9 +369,9 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
       InputSection *isec;
       if (sectionType(sec.flags) == S_CSTRING_LITERALS) {
         isec = new CStringInputSection(section, data, align,
-                                         /*dedupLiterals=*/name ==
-                                                 section_names::objcMethname ||
-                                             config->dedupLiterals);
+                                       /*dedupLiterals=*/name ==
+                                               section_names::objcMethname ||
+                                           config->dedupLiterals);
         // FIXME: parallelize this?
         cast<CStringInputSection>(isec)->splitIntoPieces();
       } else {
@@ -432,8 +433,8 @@ void ObjFile::splitEhFrames(ArrayRef<uint8_t> data, Section &ehFrameSection) {
     // just not of the individual EH frames.
     ehFrameSection.subsections.push_back(
         {frameOff, new ConcatInputSection(ehFrameSection,
-                                            data.slice(frameOff, fullLength),
-                                            /*align=*/1)});
+                                          data.slice(frameOff, fullLength),
+                                          /*align=*/1)});
   }
   ehFrameSection.doneSplitting = true;
 }
@@ -479,7 +480,7 @@ static Defined *findSymbolAtOffset(const ConcatInputSection *isec,
   });
   // The offset should point at the exact address of a symbol (with no addend.)
   if (it == isec->symbols.end() || (*it)->value != off) {
-    assert(isec->wasCoalesced);
+    //    assert(isec->wasCoalesced);
     return nullptr;
   }
   return *it;
@@ -644,6 +645,28 @@ void ObjFile::parseRelocations(ArrayRef<SectionHeader> sectionHeaders,
   }
 }
 
+static uint64_t getRank(InputFile *file, bool isCommon, bool isWeak) {
+  if (!file)
+    return 7 << 24;
+
+  if (isCommon) {
+    if (file->lazyArchiveMember.load(std::memory_order_relaxed))
+      return (6 << 24) + file->priority;
+    return (5 << 24) + file->priority;
+  }
+
+  if (isa<DylibFile>(file) ||
+      file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+    if (isWeak)
+      return (4 << 24) + file->priority;
+    return (3 << 24) + file->priority;
+  }
+
+  if (isWeak)
+    return (2 << 24) + file->priority;
+  return (1 << 24) + file->priority;
+}
+
 template <class NList>
 static macho::Symbol *createDefined(const NList &sym, StringRef name,
                                     InputSection *isec, uint64_t value,
@@ -705,7 +728,7 @@ static macho::Symbol *createDefined(const NList &sym, StringRef name,
       isWeakDefCanBeHidden = false;
     else if (isWeakDefCanBeHidden)
       isPrivateExtern = true;
-    return symtab->addDefined(
+    return symtab->addDefinedEager(
         name, isec->getFile(), isec, value, size, sym.n_desc & N_WEAK_DEF,
         isPrivateExtern, sym.n_desc & N_ARM_THUMB_DEF,
         sym.n_desc & REFERENCED_DYNAMICALLY, sym.n_desc & N_NO_DEAD_STRIP,
@@ -729,18 +752,18 @@ static macho::Symbol *createAbsolute(const NList &sym, InputFile *file,
                                      StringRef name, bool forceHidden) {
   if (sym.n_type & N_EXT) {
     bool isPrivateExtern = sym.n_type & N_PEXT || forceHidden;
-    return symtab->addDefined(
+    return symtab->addDefinedEager(
         name, file, nullptr, sym.n_value, /*size=*/0,
         /*isWeakDef=*/false, isPrivateExtern, sym.n_desc & N_ARM_THUMB_DEF,
         /*isReferencedDynamically=*/false, sym.n_desc & N_NO_DEAD_STRIP,
         /*isWeakDefCanBeHidden=*/false);
   }
   return new Defined(name, file, nullptr, sym.n_value, /*size=*/0,
-                       /*isWeakDef=*/false,
-                       /*isExternal=*/false, /*isPrivateExtern=*/false,
-                       /*includeInSymtab=*/true, sym.n_desc & N_ARM_THUMB_DEF,
-                       /*isReferencedDynamically=*/false,
-                       sym.n_desc & N_NO_DEAD_STRIP);
+                     /*isWeakDef=*/false,
+                     /*isExternal=*/false, /*isPrivateExtern=*/false,
+                     /*includeInSymtab=*/true, sym.n_desc & N_ARM_THUMB_DEF,
+                     /*isReferencedDynamically=*/false,
+                     sym.n_desc & N_NO_DEAD_STRIP);
 }
 
 template <class NList>
@@ -794,6 +817,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
   // Groups indices of the symbols by the sections that contain them.
   std::vector<std::vector<uint32_t>> symbolsBySection(sections.size());
   symbols.resize(nList.size());
+  symbolToSubsection.resize(nList.size());
   for (uint32_t i = 0; i < nList.size(); ++i) {
     const NList &sym = nList[i];
 
@@ -841,6 +865,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         }
         symbols[symIndex] =
             createDefined(sym, name, isec, 0, isec->getSize(), forceHidden);
+        symbolToSubsection[symIndex] = isec;
       }
       continue;
     }
@@ -878,6 +903,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         isec->hasAltEntry = symbolOffset != 0;
         symbols[symIndex] = createDefined(sym, name, isec, symbolOffset,
                                           symbolSize, forceHidden);
+        symbolToSubsection[symIndex] = isec;
         continue;
       }
       auto *concatIsec = cast<ConcatInputSection>(isec);
@@ -897,6 +923,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
       // subsection.
       symbols[symIndex] = createDefined(sym, name, nextIsec, /*value=*/0,
                                         symbolSize, forceHidden);
+      symbolToSubsection[symIndex] = nextIsec;
       // TODO: ld64 appears to preserve the original alignment as well as each
       // subsection's offset from the last aligned address. We should consider
       // emulating that behavior.
@@ -911,10 +938,8 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
   // symbol resolution behavior. In addition, a set of interconnected symbols
   // will all be resolved to the same file, instead of being resolved to
   // different files.
-  for (unsigned i : undefineds) {
-    if (!lazyArchiveMember.load(std::memory_order_relaxed))
-      symbols[i] = parseNonSectionSymbol(nList[i], strtab);
-  }
+  for (unsigned i : undefineds)
+    symbols[i] = parseNonSectionSymbol(nList[i], strtab);
 }
 
 OpaqueFile::OpaqueFile(MemoryBufferRef mb, StringRef segName,
@@ -943,35 +968,33 @@ ObjFile::ObjFile(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
 }
 
 void ObjFile::parseFile() {
-  if (lazyArchiveMember.load(std::memory_order_relaxed)) {
-    if (target->wordSize == 8)
-      parseLazyObjFile<LP64>();
-    else
-      parseLazyObjFile<ILP32>();
-  } else {
-    if (target->wordSize == 8)
-      parse<LP64>();
-    else
-      parse<ILP32>();
-  }
   parseObjCMember();
-}
-
-void ObjFile::parseFileNew() {
   if (target->wordSize == 8)
     parse<LP64>();
   else
     parse<ILP32>();
 }
 
-void ObjFile::parseLazyArchiveSymbols() {
-  if (lazyArchiveMember.load(std::memory_order_relaxed)) {
-    if (target->wordSize == 8)
-      parseLazyObjFile<LP64>();
-    else
-      parseLazyObjFile<ILP32>();
-  }
-  parseObjCMember();
+void ObjFile::resolveSymbols() {
+  if (target->wordSize == 8)
+    resolveDefineds<LP64>();
+  else
+    resolveDefineds<ILP32>();
+}
+
+void ObjFile::markLive() {
+  assert(!lazyArchiveMember.load(std::memory_order_relaxed));
+  if (target->wordSize == 8)
+    markLiveObjFile<LP64>();
+  else
+    markLiveObjFile<ILP32>();
+}
+
+void ObjFile::markCoalescedSections() {
+  if (target->wordSize == 8)
+    markCoalescedSubsections<LP64>();
+  else
+    markCoalescedSubsections<ILP32>();
 }
 
 template <class LP> void ObjFile::parse() {
@@ -1007,9 +1030,6 @@ template <class LP> void ObjFile::parse() {
         reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
     parseSections(sectionHeaders);
   }
-  
-  if (lazyArchiveMember.load(std::memory_order_relaxed))
-    return;
 
   // TODO: Error on missing LC_SYMTAB?
   if (const load_command *cmd = findCommand(hdr, LC_SYMTAB)) {
@@ -1045,46 +1065,92 @@ template <class LP> void ObjFile::parse() {
     registerEhFrames(*ehFrameSection);
 }
 
-template <class LP> void ObjFile::parseRelocations() {
+template <class LP> void ObjFile::resolveDefineds() {
   using Header = typename LP::mach_header;
-  using SegmentCommand = typename LP::segment_command;
-  using SectionHeader = typename LP::section;
   using NList = typename LP::nlist;
 
+  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
   auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
+  if (!cmd)
+    return;
+  auto *c = reinterpret_cast<const symtab_command *>(cmd);
+  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
+                        c->nsyms);
+  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
+  for (const auto &[i, mSym] : llvm::enumerate(nList)) {
+    if (!(mSym.n_type & N_EXT) || (mSym.n_type & N_TYPE) == N_UNDF)
+      continue;
 
-  ArrayRef<SectionHeader> sectionHeaders;
-  if (const load_command *cmd = findCommand(hdr, LP::segmentLCType)) {
-    auto *c = reinterpret_cast<const SegmentCommand *>(cmd);
-    sectionHeaders = ArrayRef<SectionHeader>{
-        reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
+    auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
+    StringRef name = strtab + mSym.n_strx;
+    auto *defined = dyn_cast_or_null<Defined>(symtab->find(name));
+    if (sym && defined && sym->getFile() != defined->getFile()) {
+      bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
+      bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
+                                  (N_WEAK_DEF | N_WEAK_REF);
+      bool isPrivateExtern = mSym.n_type & N_PEXT || forceHidden;
+      if (isWeakDefCanBeHidden && isPrivateExtern)
+        isWeakDefCanBeHidden = false;
+      else if (isWeakDefCanBeHidden)
+        isPrivateExtern = true;
+      symtab->addDefined(name, this, sym->isec, sym->value, sym->size,
+                         isWeakDef, isPrivateExtern,
+                         mSym.n_desc & N_ARM_THUMB_DEF,
+                         mSym.n_desc & REFERENCED_DYNAMICALLY,
+                         mSym.n_desc & N_NO_DEAD_STRIP, isWeakDefCanBeHidden);
+    }
   }
-  
-  // The relocations may refer to the symbols, so we parse them after we have
-  // parsed all the symbols.
-  for (size_t i = 0, n = sections.size(); i < n; ++i)
-    if (!sections[i]->subsections.empty())
-      parseRelocations(sectionHeaders, sectionHeaders[i], *sections[i]);
+}
 
-  Section *ehFrameSection = nullptr;
-  Section *compactUnwindSection = nullptr;
-  for (Section *sec : sections) {
-    Section **s = StringSwitch<Section **>(sec->name)
-                      .Case(section_names::compactUnwind, &compactUnwindSection)
-                      .Case(section_names::ehFrame, &ehFrameSection)
-                      .Default(nullptr);
-    if (s)
-      *s = sec;
+template <class LP> void ObjFile::markLiveObjFile() {
+  using Header = typename LP::mach_header;
+  using NList = typename LP::nlist;
+
+  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
+  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
+  if (!cmd)
+    return;
+  auto *c = reinterpret_cast<const symtab_command *>(cmd);
+  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
+                        c->nsyms);
+  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
+  for (unsigned i : undefineds) {
+    const NList &sym = nList[i];
+    StringRef name = strtab + sym.n_strx;
+    symtab->markLive(name, this);
   }
-  if (compactUnwindSection)
-    registerCompactUnwind(*compactUnwindSection);
-  if (ehFrameSection)
-    registerEhFrames(*ehFrameSection);
+}
+
+template <class LP> void ObjFile::markCoalescedSubsections() {
+  using Header = typename LP::mach_header;
+  using NList = typename LP::nlist;
+
+  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
+  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
+  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
+  if (!cmd)
+    return;
+  auto *c = reinterpret_cast<const symtab_command *>(cmd);
+  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
+                        c->nsyms);
+  for (const auto &[i, mSym] : llvm::enumerate(nList)) {
+    if (!(mSym.n_type & N_EXT) || (mSym.n_type & N_TYPE) != N_SECT ||
+        !(mSym.n_desc & N_WEAK_DEF))
+      continue;
+    auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
+    if (sym && sym->getFile() != this)
+      if (auto concatIsec = dyn_cast_or_null<ConcatInputSection>(sym->isec)) {
+        concatIsec->wasCoalesced = true;
+        concatIsec->symbols.erase(llvm::find(concatIsec->symbols, sym));
+      }
+  }
 }
 
 template <class LP> void ObjFile::parseObjFileLinkerOption() {
   using Header = typename LP::mach_header;
-  
+
   auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
 
   uint32_t cpuType;
@@ -1133,59 +1199,6 @@ template <class LP> void ObjFile::parseLazy() {
       if (!lazy)
         break;
     }
-  }
-}
-
-template <class LP> void ObjFile::parseLazyObjFile() {
-  using Header = typename LP::mach_header;
-  using NList = typename LP::nlist;
-
-  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
-  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
-  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
-  if (!cmd)
-    return;
-  auto *c = reinterpret_cast<const symtab_command *>(cmd);
-  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
-                        c->nsyms);
-  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
-  for (const auto &[i, sym] : llvm::enumerate(nList)) {
-    if ((sym.n_type & N_EXT) && !isUndef(sym)) {
-      StringRef name = strtab + sym.n_strx;
-      symtab->addLazyObjFile(name, this);
-      if (!lazyArchiveMember.load(std::memory_order_relaxed))
-        break;
-    }
-  }
-}
-
-template <class LP> void ObjFile::parseSymbols() {
-  if (sections.empty())
-    return;
-  
-  using Header = typename LP::mach_header;
-  using SegmentCommand = typename LP::segment_command;
-  using SectionHeader = typename LP::section;
-  using NList = typename LP::nlist;
-
-  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
-  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
-
-  ArrayRef<SectionHeader> sectionHeaders;
-  if (const load_command *cmd = findCommand(hdr, LP::segmentLCType)) {
-    auto *c = reinterpret_cast<const SegmentCommand *>(cmd);
-    sectionHeaders = ArrayRef<SectionHeader>{
-        reinterpret_cast<const SectionHeader *>(c + 1), c->nsects};
-  }
-
-  // TODO: Error on missing LC_SYMTAB?
-  if (const load_command *cmd = findCommand(hdr, LC_SYMTAB)) {
-    auto *c = reinterpret_cast<const symtab_command *>(cmd);
-    ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
-                          c->nsyms);
-    const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
-    bool subsectionsViaSymbols = hdr->flags & MH_SUBSECTIONS_VIA_SYMBOLS;
-    parseSymbols<LP>(sectionHeaders, nList, strtab, subsectionsViaSymbols);
   }
 }
 
@@ -1461,7 +1474,8 @@ targetSymFromCanonicalSubtractor(const InputSection *isec,
       cast_or_null<Defined>(minuend.referent.dyn_cast<macho::Symbol *>());
   if (!pcSym) {
     if (minuend.referent.get<InputSection *>()) {
-      auto *targetIsec = cast<ConcatInputSection>(minuend.referent.get<InputSection *>());
+      auto *targetIsec =
+          cast<ConcatInputSection>(minuend.referent.get<InputSection *>());
       target = findSymbolAtOffset(targetIsec, minuend.addend);
     }
   }
@@ -1525,7 +1539,7 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
       fatal("found symbol at unexpected offset in __eh_frame");
 
     EhReader reader(this, isec->data, subsec.offset);
-    size_t dataOff = 0; // Offset from the start of the EH frame.
+    size_t dataOff = 0;               // Offset from the start of the EH frame.
     reader.skipValidLength(&dataOff); // readLength() already validated this.
     // cieOffOff is the offset from the start of the EH frame to the cieOff
     // value, which is itself an offset from the current PC to a CIE.
@@ -2256,7 +2270,8 @@ loadArchiveMember(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
   }
 }
 
-Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason, bool lazyArchiveMember) {
+Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason,
+                         bool lazyArchiveMember) {
   if (!seen.insert(c.getChildOffset()).second)
     return Error::success();
 
@@ -2278,13 +2293,15 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason, bool
   if (!file)
     return file.takeError();
 
-  (*file)->lazyArchiveMember.store(lazyArchiveMember, std::memory_order_relaxed);
+  (*file)->lazyArchiveMember.store(lazyArchiveMember,
+                                   std::memory_order_relaxed);
   inputFiles.insert(*file);
   printArchiveMemberLoad(reason, *file);
   return Error::success();
 }
 
-void ArchiveFile::fetch(const llvm::object::Archive::Symbol &sym, bool lazyArchiveMember) {
+void ArchiveFile::fetch(const llvm::object::Archive::Symbol &sym,
+                        bool lazyArchiveMember) {
   object::Archive::Child c =
       CHECK(sym.getMember(), toString(this) +
                                  ": could not get the member defining symbol " +
@@ -2329,12 +2346,12 @@ static macho::Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
     return symtab->addCommon(name, &file, objSym.getCommonSize(),
                              objSym.getCommonAlignment(), isPrivateExtern);
 
-  return symtab->addDefined(name, &file, /*isec=*/nullptr, /*value=*/0,
-                            /*size=*/0, objSym.isWeak(), isPrivateExtern,
-                            /*isThumb=*/false,
-                            /*isReferencedDynamically=*/false,
-                            /*noDeadStrip=*/false,
-                            /*isWeakDefCanBeHidden=*/false);
+  return symtab->addDefinedEager(name, &file, /*isec=*/nullptr, /*value=*/0,
+                                 /*size=*/0, objSym.isWeak(), isPrivateExtern,
+                                 /*isThumb=*/false,
+                                 /*isReferencedDynamically=*/false,
+                                 /*noDeadStrip=*/false,
+                                 /*isWeakDefCanBeHidden=*/false);
 }
 
 BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
@@ -2372,7 +2389,7 @@ void BitcodeFile::parse() {
     }
     symbols.push_back(createBitcodeSymbol(objSym, *this));
   }
-  
+
   parseObjCMember();
 }
 
@@ -2381,20 +2398,8 @@ void BitcodeFile::parseBitcodeFile() {
     parseLazyObjFile();
   else
     parse();
-  
+
   parseObjCMember();
-}
-
-void BitcodeFile::parseLazyArchiveSymbols() {
-  if (lazyArchiveMember.load(std::memory_order_relaxed))
-    parseLazyObjFile();
-}
-
-void BitcodeFile::parseUndefineds() {
-  for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
-    if (objSym.isUndefined())
-      symbols[i] = createBitcodeSymbol(objSym, *this);
-  }
 }
 
 void BitcodeFile::parseLazy() {
@@ -2433,31 +2438,19 @@ void macho::extract(InputFile &file, StringRef reason) {
   }
 }
 
-void macho::extractArchiveMember(InputFile &file, StringRef reason) {
+void macho::fastMarkLiveFile(InputFile &file, StringRef reason) {
   if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
     return;
   file.lazyArchiveMember.store(false, std::memory_order_relaxed);
-//  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-//    bitcode->parse();
-//  } else {
-//    auto &f = cast<ObjFile>(file);
-//    if (target->wordSize == 8)
-//      f.parse<LP64>();
-//    else
-//      f.parse<ILP32>();
-//  }
-  
+
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    bitcode->parseUndefineds();
+    // TODO: mark bitcode file alive
   } else {
     auto &f = cast<ObjFile>(file);
-    if (target->wordSize == 8) {
-      f.parseSymbols<LP64>();
-      f.parseRelocations<LP64>();
-    } else {
-      f.parseSymbols<ILP32>();
-      f.parseRelocations<ILP32>();
-    }
+    if (target->wordSize == 8)
+      f.markLiveObjFile<LP64>();
+    else
+      f.markLiveObjFile<ILP32>();
   }
 }
 

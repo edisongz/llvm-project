@@ -1139,32 +1139,65 @@ static void createFiles(const InputArgList &args) {
       break;
     }
   }
+  // Record input file order
+  int64_t priority = 10000;
+  for (InputFile *file : inputFiles) {
+    file->priority = priority++;
+  }
 }
 
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
-  // Parse lazy archive symbols
-  parallelForEach(inputFiles, [](InputFile *file) {
-    if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseLazyArchiveSymbols();
-    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
-      bitcodeFile->parseLazyArchiveSymbols();
-    }
-  });
-  
   // Parse obj or bitcode files
   for (InputFile *file : inputFiles) {
-    if (auto *objFile = dyn_cast<ObjFile>(file)) {
-      objFile->parseFileNew();
-    } else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file)) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
+      objFile->parseFile();
+    else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file))
       bitcodeFile->parse();
-    }
   }
-  
+}
+
+static void resolveSymbols() {
+  TimeTraceScope timeScope("Resolve symbols");
+  parallelForEach(inputFiles, [](InputFile *file) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
+      objFile->resolveSymbols();
+  });
+
+  parallelForEach(inputFiles, [](InputFile *file) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
+      if (!objFile->lazyArchiveMember.load(std::memory_order_relaxed))
+        objFile->markLive();
+  });
+
   std::atomic_thread_fence(std::memory_order_seq_cst);
   inputFiles.remove_if([&](const InputFile *file) {
     return file->lazyArchiveMember.load(std::memory_order_relaxed);
   });
+}
+
+static void markCoalescedSubsections() {
+  TimeTraceScope timeScope("Mark coalesced subsections");
+  parallelForEach(inputFiles, [](InputFile *file) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
+      objFile->markCoalescedSections();
+  });
+  
+  fprintf(stderr, "files:%d, symtab:%d\n", (int)inputFiles.size(), (int)symtab->getSymbols().size());
+  for (InputFile *file : inputFiles) {
+    if (auto *objFile = dyn_cast<ObjFile>(file)) {
+//      int count = 0;
+//      for (const Section *section : file->sections) {
+//        for (const Subsection &subsection : section->subsections) {
+//          if (auto *isec = dyn_cast<ConcatInputSection>(subsection.isec)) {
+//            if (!isec->isCoalescedWeak())
+//              count++;
+//          }
+//        }
+//      }
+      fprintf(stderr, "file:%s\n", file->getName().data());
+    }
+  }
 }
 
 static void gatherInputSections() {
@@ -1216,6 +1249,7 @@ static void gatherInputSections() {
       in.objCImageInfo->addFile(file);
   }
   assert(inputOrder <= UnspecifiedInputOrder);
+  fprintf(stderr, "input sections:%d\n", (int)inputSections.size());
 }
 
 static void foldIdenticalLiterals() {
@@ -1319,35 +1353,39 @@ static void createAliases() {
 
 static void handleExplicitExports() {
   if (config->hasExplicitExports) {
-    for (auto iter = symtab->getSymbols().begin();
-         iter != symtab->getSymbols().end(); ++iter) {
-      if (auto *defined = dyn_cast<Defined>(iter->second)) {
-        StringRef symbolName = defined->getName();
-        if (config->exportedSymbols.match(symbolName)) {
-          if (defined->privateExtern) {
-            if (defined->weakDefCanBeHidden) {
-              // weak_def_can_be_hidden symbols behave similarly to
-              // private_extern symbols in most cases, except for when
-              // it is explicitly exported.
-              // The former can be exported but the latter cannot.
-              defined->privateExtern = false;
-            } else {
-              warn("cannot export hidden symbol " + toString(*defined) +
-                   "\n>>> defined in " + toString(defined->getFile()));
+    tbb::parallel_for(
+        symtab->getSymbols().range(), [&](SymbolMap::range_type &r) {
+          for (auto iter = r.begin(); iter != r.end(); iter++) {
+            if (auto *defined = dyn_cast<Defined>(iter->second)) {
+              StringRef symbolName = defined->getName();
+              if (config->exportedSymbols.match(symbolName)) {
+                if (defined->privateExtern) {
+                  if (defined->weakDefCanBeHidden) {
+                    // weak_def_can_be_hidden symbols behave similarly to
+                    // private_extern symbols in most cases, except for when
+                    // it is explicitly exported.
+                    // The former can be exported but the latter cannot.
+                    defined->privateExtern = false;
+                  } else {
+                    warn("cannot export hidden symbol " + toString(*defined) +
+                         "\n>>> defined in " + toString(defined->getFile()));
+                  }
+                }
+              } else {
+                defined->privateExtern = true;
+              }
             }
           }
-        } else {
-          defined->privateExtern = true;
-        }
-      }
-    }
+        });
   } else if (!config->unexportedSymbols.empty()) {
-    for (auto iter = symtab->getSymbols().begin();
-         iter != symtab->getSymbols().end(); ++iter) {
-      if (auto *defined = dyn_cast<Defined>(iter->second))
-        if (config->unexportedSymbols.match(defined->getName()))
-          defined->privateExtern = true;
-    }
+    tbb::parallel_for(
+        symtab->getSymbols().range(), [&](SymbolMap::range_type &r) {
+          for (auto iter = r.begin(); iter != r.end(); iter++) {
+            if (auto *defined = dyn_cast<Defined>(iter->second))
+              if (config->unexportedSymbols.match(defined->getName()))
+                defined->privateExtern = true;
+          }
+        });
   }
 }
 
@@ -1791,6 +1829,8 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     initLLVM(); // must be run before any call to addFile()
     createFiles(args);
     parseInputFiles();
+    resolveSymbols();
+    markCoalescedSubsections();
 
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.

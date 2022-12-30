@@ -136,7 +136,9 @@ public:
   bool lazy = false;
 
   std::atomic_bool lazyArchiveMember{false};
-  
+
+  int64_t priority{0};
+
 protected:
   InputFile(Kind kind, MemoryBufferRef mb, bool lazy = false)
       : mb(mb), id(idCount++), lazy(lazy), fileKind(kind),
@@ -165,12 +167,14 @@ public:
   ArrayRef<llvm::MachO::data_in_code_entry> getDataInCode() const;
   ArrayRef<uint8_t> getOptimizationHints() const;
   template <class LP> void parse();
-  template <class LP> void parseSymbols();
-  template <class LP> void parseRelocations();
+  template <class LP> void resolveDefineds();
+  template <class LP> void markLiveObjFile();
+  template <class LP> void markCoalescedSubsections();
   void parseFile();
-  void parseFileNew();
-  void parseLazyArchiveSymbols();
-  
+  void resolveSymbols();
+  void markLive();
+  void markCoalescedSections();
+
   static bool classof(const InputFile *f) { return f->kind() == ObjKind; }
 
   std::string sourceFile() const;
@@ -190,10 +194,10 @@ public:
 
 private:
   llvm::once_flag initDwarf;
+  std::vector<InputSection *> symbolToSubsection;
   SmallVector<unsigned, 32> undefineds;
   template <class LP> void parseObjFileLinkerOption();
   template <class LP> void parseLazy();
-  template <class LP> void parseLazyObjFile();
   template <class SectionHeader> void parseSections(ArrayRef<SectionHeader>);
   template <class LP>
   void parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
@@ -291,10 +295,12 @@ public:
   explicit ArchiveFile(std::unique_ptr<llvm::object::Archive> &&file,
                        bool forceHidden);
   void addLazySymbols();
-  void fetch(const llvm::object::Archive::Symbol &, bool lazyArchiveMember = false);
+  void fetch(const llvm::object::Archive::Symbol &,
+             bool lazyArchiveMember = false);
   // LLD normally doesn't use Error for error-handling, but the underlying
   // Archive library does, so this is the cleanest way to wrap it.
-  Error fetch(const llvm::object::Archive::Child &, StringRef reason, bool lazyArchiveMember = false);
+  Error fetch(const llvm::object::Archive::Child &, StringRef reason,
+              bool lazyArchiveMember = false);
   const llvm::object::Archive &getArchive() const { return *file; };
   static bool classof(const InputFile *f) { return f->kind() == ArchiveKind; }
 
@@ -315,9 +321,7 @@ public:
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
   void parse();
   void parseBitcodeFile();
-  void parseLazyArchiveSymbols();
-  void parseUndefineds();
-  
+
   std::unique_ptr<llvm::lto::InputFile> obj;
   bool forceHidden;
 
@@ -332,7 +336,7 @@ extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
 llvm::Optional<MemoryBufferRef> readFile(StringRef path);
 
 void extract(InputFile &file, StringRef reason);
-void extractArchiveMember(InputFile &file, StringRef reason);
+void fastMarkLiveFile(InputFile &file, StringRef reason);
 
 namespace detail {
 

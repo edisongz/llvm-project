@@ -54,7 +54,8 @@ public:
 
   bool isLive() const { return used; }
   bool isLazy() const {
-    return symbolKind == LazyArchiveKind || symbolKind == LazyObjectKind || symbolKind == LazyObjFileKind;
+    return symbolKind == LazyArchiveKind || symbolKind == LazyObjectKind ||
+           symbolKind == LazyObjFileKind;
   }
 
   virtual uint64_t getVA() const { return 0; }
@@ -98,6 +99,7 @@ public:
   void clearFile() {
     file = nullptr;
     used = false;
+    isUsedInRegularObj = false;
   }
 
 protected:
