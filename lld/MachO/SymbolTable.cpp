@@ -100,19 +100,10 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
           defined->referencedDynamically |= isReferencedDynamically;
           defined->noDeadStrip |= noDeadStrip;
         }
-        // FIXME: Handle this for bitcode files.
-        if (auto concatIsec = dyn_cast_or_null<ConcatInputSection>(isec))
-          concatIsec->wasCoalesced = true;
         return defined;
       }
 
       if (defined->isWeakDef()) {
-        // FIXME: Handle this for bitcode files.
-        if (auto concatIsec =
-                dyn_cast_or_null<ConcatInputSection>(defined->isec)) {
-          concatIsec->wasCoalesced = true;
-          concatIsec->symbols.erase(llvm::find(concatIsec->symbols, defined));
-        }
       } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
         if (defined->getFile()->lazyArchiveMember.load(
                 std::memory_order_relaxed)) {
@@ -234,6 +225,23 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
   return s;
 }
 
+Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
+                                       bool isWeakRef) {
+  typename decltype(symMap)::const_accessor accessor;
+  
+  Symbol *s;
+  if (symMap.find(accessor, CachedHashStringRef(name))) {
+    s = accessor->second;
+  } else {
+    RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
+    s = reinterpret_cast<Symbol *>(new SymbolUnion());
+    replaceSymbol<Undefined>(s, name, file, refState,
+                             /*wasBitcodeSymbol=*/false);
+    symMap.insert(accessor, {CachedHashStringRef(name), s});
+  }
+  return s;
+}
+
 void SymbolTable::markLive(StringRef name, InputFile *file) {
   if (file->lazyArchiveMember.load(std::memory_order_relaxed))
     return;
@@ -261,6 +269,22 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
   }
 
   replaceSymbol<CommonSymbol>(s, name, file, size, align, isPrivateExtern);
+  return s;
+}
+
+Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
+                                    uint64_t size, uint32_t align,
+                                    bool isPrivateExtern) {
+  typename decltype(symMap)::const_accessor accessor;
+
+  Symbol *s;
+  if (symMap.find(accessor, CachedHashStringRef(name))) {
+    s = accessor->second;
+  } else {
+    s = reinterpret_cast<Symbol *>(new SymbolUnion());
+    replaceSymbol<CommonSymbol>(s, name, file, size, align, isPrivateExtern);
+    symMap.insert(accessor, {CachedHashStringRef(name), s});
+  }
   return s;
 }
 

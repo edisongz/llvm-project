@@ -767,6 +767,23 @@ static macho::Symbol *createAbsolute(const NList &sym, InputFile *file,
 }
 
 template <class NList>
+void ObjFile::resolveNonSectionSymbol(const NList &sym, const char *strtab) {
+  StringRef name = strtab + sym.n_strx;
+  uint8_t type = sym.n_type & N_TYPE;
+  bool isPrivateExtern = sym.n_type & N_PEXT || forceHidden;
+  switch (type) {
+  case N_UNDF:
+    sym.n_value == 0
+        ? symtab->addUndefined(name, this, sym.n_desc & N_WEAK_REF)
+        : symtab->addCommon(name, this, sym.n_value,
+                            1 << GET_COMM_ALIGN(sym.n_desc), isPrivateExtern);
+    break;
+  default:
+    break;
+  }
+}
+
+template <class NList>
 macho::Symbol *ObjFile::parseNonSectionSymbol(const NList &sym,
                                               const char *strtab) {
   StringRef name = StringRef(strtab + sym.n_strx);
@@ -775,10 +792,10 @@ macho::Symbol *ObjFile::parseNonSectionSymbol(const NList &sym,
   switch (type) {
   case N_UNDF:
     return sym.n_value == 0
-               ? symtab->addUndefined(name, this, sym.n_desc & N_WEAK_REF)
-               : symtab->addCommon(name, this, sym.n_value,
-                                   1 << GET_COMM_ALIGN(sym.n_desc),
-                                   isPrivateExtern);
+               ? symtab->addUndefinedEager(name, this, sym.n_desc & N_WEAK_REF)
+               : symtab->addCommonEager(name, this, sym.n_value,
+                                        1 << GET_COMM_ALIGN(sym.n_desc),
+                                        isPrivateExtern);
   case N_ABS:
     return createAbsolute(sym, this, name, forceHidden);
   case N_INDR: {
@@ -817,7 +834,6 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
   // Groups indices of the symbols by the sections that contain them.
   std::vector<std::vector<uint32_t>> symbolsBySection(sections.size());
   symbols.resize(nList.size());
-  symbolToSubsection.resize(nList.size());
   for (uint32_t i = 0; i < nList.size(); ++i) {
     const NList &sym = nList[i];
 
@@ -865,7 +881,6 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         }
         symbols[symIndex] =
             createDefined(sym, name, isec, 0, isec->getSize(), forceHidden);
-        symbolToSubsection[symIndex] = isec;
       }
       continue;
     }
@@ -903,7 +918,6 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         isec->hasAltEntry = symbolOffset != 0;
         symbols[symIndex] = createDefined(sym, name, isec, symbolOffset,
                                           symbolSize, forceHidden);
-        symbolToSubsection[symIndex] = isec;
         continue;
       }
       auto *concatIsec = cast<ConcatInputSection>(isec);
@@ -923,7 +937,6 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
       // subsection.
       symbols[symIndex] = createDefined(sym, name, nextIsec, /*value=*/0,
                                         symbolSize, forceHidden);
-      symbolToSubsection[symIndex] = nextIsec;
       // TODO: ld64 appears to preserve the original alignment as well as each
       // subsection's offset from the last aligned address. We should consider
       // emulating that behavior.
@@ -1005,24 +1018,6 @@ template <class LP> void ObjFile::parse() {
 
   auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
   auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
-
-  uint32_t cpuType;
-  std::tie(cpuType, std::ignore) = getCPUTypeFromArchitecture(config->arch());
-  if (hdr->cputype != cpuType) {
-    Architecture arch =
-        getArchitectureFromCpuType(hdr->cputype, hdr->cpusubtype);
-    auto msg = config->errorForArchMismatch
-                   ? static_cast<void (*)(const Twine &)>(error)
-                   : warn;
-    msg(toString(this) + " has architecture " + getArchitectureName(arch) +
-        " which is incompatible with target architecture " +
-        getArchitectureName(config->arch()));
-    return;
-  }
-
-  if (!checkCompatibility(this))
-    return;
-
   ArrayRef<SectionHeader> sectionHeaders;
   if (const load_command *cmd = findCommand(hdr, LP::segmentLCType)) {
     auto *c = reinterpret_cast<const SegmentCommand *>(cmd);
@@ -1079,26 +1074,30 @@ template <class LP> void ObjFile::resolveDefineds() {
                         c->nsyms);
   const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
   for (const auto &[i, mSym] : llvm::enumerate(nList)) {
-    if (!(mSym.n_type & N_EXT) || (mSym.n_type & N_TYPE) == N_UNDF)
+    if (!(mSym.n_type & N_EXT))
       continue;
 
-    auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
-    StringRef name = strtab + mSym.n_strx;
-    auto *defined = dyn_cast_or_null<Defined>(symtab->find(name));
-    if (sym && defined && sym->getFile() != defined->getFile()) {
-      bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
-      bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
-                                  (N_WEAK_DEF | N_WEAK_REF);
-      bool isPrivateExtern = mSym.n_type & N_PEXT || forceHidden;
-      if (isWeakDefCanBeHidden && isPrivateExtern)
-        isWeakDefCanBeHidden = false;
-      else if (isWeakDefCanBeHidden)
-        isPrivateExtern = true;
-      symtab->addDefined(name, this, sym->isec, sym->value, sym->size,
-                         isWeakDef, isPrivateExtern,
-                         mSym.n_desc & N_ARM_THUMB_DEF,
-                         mSym.n_desc & REFERENCED_DYNAMICALLY,
-                         mSym.n_desc & N_NO_DEAD_STRIP, isWeakDefCanBeHidden);
+    if ((mSym.n_type & N_TYPE) != N_UNDF) {
+      auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
+      StringRef name = strtab + mSym.n_strx;
+      auto *defined = dyn_cast_or_null<Defined>(symtab->find(name));
+      if (sym && defined && sym->getFile() != defined->getFile()) {
+        bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
+        bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
+                                    (N_WEAK_DEF | N_WEAK_REF);
+        bool isPrivateExtern = mSym.n_type & N_PEXT || forceHidden;
+        if (isWeakDefCanBeHidden && isPrivateExtern)
+          isWeakDefCanBeHidden = false;
+        else if (isWeakDefCanBeHidden)
+          isPrivateExtern = true;
+        symtab->addDefined(name, this, sym->isec, sym->value, sym->size,
+                           isWeakDef, isPrivateExtern,
+                           mSym.n_desc & N_ARM_THUMB_DEF,
+                           mSym.n_desc & REFERENCED_DYNAMICALLY,
+                           mSym.n_desc & N_NO_DEAD_STRIP, isWeakDefCanBeHidden);
+      }
+    } else {
+      resolveNonSectionSymbol(mSym, strtab);
     }
   }
 }
@@ -1174,31 +1173,6 @@ template <class LP> void ObjFile::parseObjFileLinkerOption() {
     StringRef data{reinterpret_cast<const char *>(cmd + 1),
                    cmd->cmdsize - sizeof(linker_option_command)};
     parseLCLinkerOption(this, cmd->count, data);
-  }
-}
-
-template <class LP> void ObjFile::parseLazy() {
-  using Header = typename LP::mach_header;
-  using NList = typename LP::nlist;
-
-  auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
-  auto *hdr = reinterpret_cast<const Header *>(mb.getBufferStart());
-  const load_command *cmd = findCommand(hdr, LC_SYMTAB);
-  if (!cmd)
-    return;
-  auto *c = reinterpret_cast<const symtab_command *>(cmd);
-  ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
-                        c->nsyms);
-  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
-  symbols.resize(nList.size());
-  for (const auto &[i, sym] : llvm::enumerate(nList)) {
-    if ((sym.n_type & N_EXT) && !isUndef(sym)) {
-      // TODO: Bound checking
-      StringRef name = strtab + sym.n_strx;
-      symbols[i] = symtab->addLazyObject(name, *this);
-      if (!lazy)
-        break;
-    }
   }
 }
 
@@ -2324,7 +2298,8 @@ static macho::Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
   StringRef name = saver().save(objSym.getName());
 
   if (objSym.isUndefined())
-    return symtab->addUndefined(name, &file, /*isWeakRef=*/objSym.isWeak());
+    return symtab->addUndefinedEager(name, &file,
+                                     /*isWeakRef=*/objSym.isWeak());
 
   // TODO: Write a test demonstrating why computing isPrivateExtern before
   // LTO compilation is important.
@@ -2343,8 +2318,8 @@ static macho::Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
                     file.forceHidden;
 
   if (objSym.isCommon())
-    return symtab->addCommon(name, &file, objSym.getCommonSize(),
-                             objSym.getCommonAlignment(), isPrivateExtern);
+    return symtab->addCommonEager(name, &file, objSym.getCommonSize(),
+                                  objSym.getCommonAlignment(), isPrivateExtern);
 
   return symtab->addDefinedEager(name, &file, /*isec=*/nullptr, /*value=*/0,
                                  /*size=*/0, objSym.isWeak(), isPrivateExtern,
@@ -2423,20 +2398,7 @@ void BitcodeFile::parseLazyObjFile() {
   }
 }
 
-void macho::extract(InputFile &file, StringRef reason) {
-  assert(file.lazy);
-  file.lazy = false;
-  printArchiveMemberLoad(reason, &file);
-  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    bitcode->parse();
-  } else {
-    auto &f = cast<ObjFile>(file);
-    if (target->wordSize == 8)
-      f.parse<LP64>();
-    else
-      f.parse<ILP32>();
-  }
-}
+void macho::extract(InputFile &file, StringRef reason) {}
 
 void macho::fastMarkLiveFile(InputFile &file, StringRef reason) {
   if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
@@ -2447,10 +2409,7 @@ void macho::fastMarkLiveFile(InputFile &file, StringRef reason) {
     // TODO: mark bitcode file alive
   } else {
     auto &f = cast<ObjFile>(file);
-    if (target->wordSize == 8)
-      f.markLiveObjFile<LP64>();
-    else
-      f.markLiveObjFile<ILP32>();
+    f.markLive();
   }
 }
 

@@ -135,6 +135,7 @@ public:
   // True if this is a lazy ObjFile or BitcodeFile.
   bool lazy = false;
 
+  // True if this is a lazy Archive member (ObjFile or BitcodeFile)
   std::atomic_bool lazyArchiveMember{false};
 
   int64_t priority{0};
@@ -166,10 +167,6 @@ public:
           bool lazy = false, bool forceHidden = false);
   ArrayRef<llvm::MachO::data_in_code_entry> getDataInCode() const;
   ArrayRef<uint8_t> getOptimizationHints() const;
-  template <class LP> void parse();
-  template <class LP> void resolveDefineds();
-  template <class LP> void markLiveObjFile();
-  template <class LP> void markCoalescedSubsections();
   void parseFile();
   void resolveSymbols();
   void markLive();
@@ -194,10 +191,9 @@ public:
 
 private:
   llvm::once_flag initDwarf;
-  std::vector<InputSection *> symbolToSubsection;
   SmallVector<unsigned, 32> undefineds;
   template <class LP> void parseObjFileLinkerOption();
-  template <class LP> void parseLazy();
+  template <class LP> void parse();
   template <class SectionHeader> void parseSections(ArrayRef<SectionHeader>);
   template <class LP>
   void parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
@@ -208,6 +204,11 @@ private:
   template <class SectionHeader>
   void parseRelocations(ArrayRef<SectionHeader> sectionHeaders,
                         const SectionHeader &, Section &);
+  template <class LP> void resolveDefineds();
+  template <class NList>
+  void resolveNonSectionSymbol(const NList &sym, const char *strtab);
+  template <class LP> void markLiveObjFile();
+  template <class LP> void markCoalescedSubsections();
   void parseDebugInfo();
   void splitEhFrames(ArrayRef<uint8_t> dataArr, Section &ehFrameSection);
   void registerCompactUnwind(Section &compactUnwindSection);

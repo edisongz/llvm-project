@@ -315,15 +315,15 @@ static InputFile *addFile(StringRef path, LoadType loadType,
         for (const object::Archive::Child &c : file->getArchive().children(e)) {
           StringRef reason;
           switch (loadType) {
-            case LoadType::LCLinkerOption:
-              reason = "LC_LINKER_OPTION";
-              break;
-            case LoadType::CommandLineForce:
-              reason = "-force_load";
-              break;
-            case LoadType::CommandLine:
-              reason = "-all_load";
-              break;
+          case LoadType::LCLinkerOption:
+            reason = "LC_LINKER_OPTION";
+            break;
+          case LoadType::CommandLineForce:
+            reason = "-force_load";
+            break;
+          case LoadType::CommandLine:
+            reason = "-all_load";
+            break;
           }
           if (Error e = file->fetch(c, reason))
             error(toString(file) + ": " + reason +
@@ -368,7 +368,7 @@ static InputFile *addFile(StringRef path, LoadType loadType,
         error(toString(file) +
               ": Archive::children failed: " + toString(std::move(e)));
     }
-    
+
     loadedArchives[path] = ArchiveFileInfo{file, isCommandLineLoad};
     newFile = file;
     break;
@@ -1149,12 +1149,12 @@ static void createFiles(const InputArgList &args) {
 static void parseInputFiles() {
   TimeTraceScope timeScope("Parse input files");
   // Parse obj or bitcode files
-  for (InputFile *file : inputFiles) {
+  parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       objFile->parseFile();
     else if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file))
       bitcodeFile->parse();
-  }
+  });
 }
 
 static void resolveSymbols() {
@@ -1182,22 +1182,6 @@ static void markCoalescedSubsections() {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       objFile->markCoalescedSections();
   });
-  
-  fprintf(stderr, "files:%d, symtab:%d\n", (int)inputFiles.size(), (int)symtab->getSymbols().size());
-  for (InputFile *file : inputFiles) {
-    if (auto *objFile = dyn_cast<ObjFile>(file)) {
-//      int count = 0;
-//      for (const Section *section : file->sections) {
-//        for (const Subsection &subsection : section->subsections) {
-//          if (auto *isec = dyn_cast<ConcatInputSection>(subsection.isec)) {
-//            if (!isec->isCoalescedWeak())
-//              count++;
-//          }
-//        }
-//      }
-      fprintf(stderr, "file:%s\n", file->getName().data());
-    }
-  }
 }
 
 static void gatherInputSections() {
@@ -1249,7 +1233,6 @@ static void gatherInputSections() {
       in.objCImageInfo->addFile(file);
   }
   assert(inputOrder <= UnspecifiedInputOrder);
-  fprintf(stderr, "input sections:%d\n", (int)inputSections.size());
 }
 
 static void foldIdenticalLiterals() {
