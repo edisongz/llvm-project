@@ -105,16 +105,11 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
 
       if (defined->isWeakDef()) {
       } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        // Defined symbols take priority over lazy archiver member
         if (defined->getFile()->lazyArchiveMember.load(
-                std::memory_order_relaxed)) {
-          if (file->priority < defined->getFile()->priority) {
-            // Defined symbols take priority over lazy archiver member
-            return new Defined(name, file, isec, value, size, isWeakDef,
-                               /*isExternal=*/false, isPrivateExtern,
-                               /*includeInSymtab=*/false, isThumb,
-                               isReferencedDynamically, noDeadStrip);
-          }
-        }
+                std::memory_order_relaxed))
+          if (file->priority < defined->getFile()->priority)
+            return defined;
       } else {
         //        std::string srcLoc1 = defined->getSourceLocation();
         //        std::string srcLoc2 = isec ? isec->getSourceLocation(value) :
@@ -131,13 +126,9 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
       overridesWeakDef = !isWeakDef && dysym->isWeakDef();
       dysym->unreference();
-      if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
-        // Dylib symbols take priority over lazy archiver member
-        return new Defined(name, file, isec, value, size, isWeakDef,
-                           /*isExternal=*/false, /*isPrivateExtern=*/false,
-                           /*includeInSymtab=*/false, isThumb,
-                           /*isReferencedDynamically=*/true, noDeadStrip);
-      }
+      // Dylib symbols take priority over lazy archiver member
+      if (file->lazyArchiveMember.load(std::memory_order_relaxed))
+        return defined;
     } else if (auto *undef = dyn_cast<Undefined>(s)) {
       // Preserve the original bitcode file name (instead of using the object
       // file name).
@@ -214,10 +205,6 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
   if (wasInserted)
     replaceSymbol<Undefined>(s, name, file, refState,
                              /*wasBitcodeSymbol=*/false);
-  else if (auto *lazy = dyn_cast<LazyArchive>(s))
-    lazy->fetchArchiveMember();
-  else if (isa<LazyObject>(s))
-    extract(*s->getFile(), s->getName());
   else if (auto *dynsym = dyn_cast<DylibSymbol>(s))
     dynsym->reference(refState);
   else if (auto *undefined = dyn_cast<Undefined>(s))
@@ -227,30 +214,21 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
 
 Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
                                        bool isWeakRef) {
-  typename decltype(symMap)::const_accessor accessor;
-  
-  Symbol *s;
-  if (symMap.find(accessor, CachedHashStringRef(name))) {
-    s = accessor->second;
-  } else {
+  auto *s = find(name);
+  if (!s) {
     RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
     s = reinterpret_cast<Symbol *>(new SymbolUnion());
     replaceSymbol<Undefined>(s, name, file, refState,
                              /*wasBitcodeSymbol=*/false);
+    typename decltype(symMap)::const_accessor accessor;
     symMap.insert(accessor, {CachedHashStringRef(name), s});
   }
   return s;
 }
 
 void SymbolTable::markLive(StringRef name, InputFile *file) {
-  if (file->lazyArchiveMember.load(std::memory_order_relaxed))
-    return;
-  auto [s, wasInserted] = insert(name, file);
-
-  if (auto *defined = dyn_cast<Defined>(s)) {
-    if (defined->getFile())
-      fastMarkLiveFile(*defined->getFile(), s->getName());
-  }
+  if (auto *defined = dyn_cast_or_null<Defined>(find(name)))
+    fastMarkLiveFile(*defined->getFile(), defined->getName());
 }
 
 Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
@@ -261,6 +239,11 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
     if (auto *common = dyn_cast<CommonSymbol>(s)) {
       if (size < common->size)
         return s;
+      else if (common->getFile()->lazyArchiveMember.load(
+                   std::memory_order_relaxed) &&
+               file->lazyArchiveMember.load(std::memory_order_relaxed))
+        if (file->priority < common->getFile()->priority)
+          return s;
     } else if (isa<Defined>(s)) {
       return s;
     }
@@ -275,14 +258,11 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
 Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
                                     uint64_t size, uint32_t align,
                                     bool isPrivateExtern) {
-  typename decltype(symMap)::const_accessor accessor;
-
-  Symbol *s;
-  if (symMap.find(accessor, CachedHashStringRef(name))) {
-    s = accessor->second;
-  } else {
+  auto *s = find(name);
+  if (!s) {
     s = reinterpret_cast<Symbol *>(new SymbolUnion());
     replaceSymbol<CommonSymbol>(s, name, file, size, align, isPrivateExtern);
+    typename decltype(symMap)::const_accessor accessor;
     symMap.insert(accessor, {CachedHashStringRef(name), s});
   }
   return s;

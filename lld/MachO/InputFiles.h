@@ -116,7 +116,6 @@ public:
   Kind kind() const { return fileKind; }
   StringRef getName() const { return name; }
   static void resetIdCount() { idCount = 0; }
-  void clearSymbols();
   void parseObjCMember();
 
   MemoryBufferRef mb;

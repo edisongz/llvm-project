@@ -96,11 +96,6 @@ public:
   uint32_t symtabIndex = UINT32_MAX;
 
   InputFile *getFile() const { return file; }
-  void clearFile() {
-    file = nullptr;
-    used = false;
-    isUsedInRegularObj = false;
-  }
 
 protected:
   Symbol(Kind k, StringRefZ name, InputFile *file)

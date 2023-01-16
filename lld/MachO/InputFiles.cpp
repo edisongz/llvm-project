@@ -251,13 +251,6 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
 InputFile::InputFile(Kind kind, const InterfaceFile &interface)
     : id(idCount++), fileKind(kind), name(saver().save(interface.getPath())) {}
 
-void InputFile::clearSymbols() {
-  for (auto &sym : symbols) {
-    if (sym && sym->getFile() == this)
-      sym->clearFile();
-  }
-}
-
 void InputFile::parseObjCMember() {
   if (!config->forceLoadObjC) {
     return;
