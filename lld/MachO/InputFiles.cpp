@@ -258,12 +258,11 @@ void InputFile::parseObjCMember() {
   if (lazyArchiveMember.load(std::memory_order_relaxed)) {
     for (Symbol *sym : symbols)
       if (sym && sym->getName().startswith(objc::klass)) {
-        if (lazyArchiveMember.load(std::memory_order_relaxed))
-          lazyArchiveMember.store(false, std::memory_order_relaxed);
+        fastMarkLive(lazyArchiveMember);
         break;
       }
-    if (lazyArchiveMember.load(std::memory_order_relaxed) && hasObjCSection(mb))
-      lazyArchiveMember.store(false, std::memory_order_relaxed);
+    if (hasObjCSection(mb))
+      fastMarkLive(lazyArchiveMember);
   }
 }
 
@@ -2260,8 +2259,8 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason,
   if (!file)
     return file.takeError();
 
-  (*file)->lazyArchiveMember.store(lazyArchiveMember,
-                                   std::memory_order_relaxed);
+  (*file)->lazyArchiveMember.exchange(lazyArchiveMember,
+                                      std::memory_order_relaxed);
   inputFiles.insert(*file);
   printArchiveMemberLoad(reason, *file);
   return Error::success();
@@ -2393,10 +2392,14 @@ void BitcodeFile::parseLazyObjFile() {
 
 void macho::extract(InputFile &file, StringRef reason) {}
 
+bool macho::fastMarkLive(std::atomic<bool> &lazyArchiverMember) {
+  return lazyArchiverMember.load(std::memory_order_relaxed) &&
+         lazyArchiverMember.exchange(false, std::memory_order_relaxed);
+}
+
 void macho::fastMarkLiveFile(InputFile &file, StringRef reason) {
-  if (!file.lazyArchiveMember.load(std::memory_order_relaxed))
+  if (!fastMarkLive(file.lazyArchiveMember))
     return;
-  file.lazyArchiveMember.store(false, std::memory_order_relaxed);
 
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
     // TODO: mark bitcode file alive

@@ -336,6 +336,7 @@ extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
 llvm::Optional<MemoryBufferRef> readFile(StringRef path);
 
 void extract(InputFile &file, StringRef reason);
+bool fastMarkLive(std::atomic<bool> &lazyArchiverMember);
 void fastMarkLiveFile(InputFile &file, StringRef reason);
 
 namespace detail {
