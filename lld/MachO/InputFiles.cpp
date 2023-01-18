@@ -1073,7 +1073,7 @@ template <class LP> void ObjFile::resolveDefineds() {
     if ((mSym.n_type & N_TYPE) != N_UNDF) {
       auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
       StringRef name = strtab + mSym.n_strx;
-      auto *defined = dyn_cast_or_null<Defined>(symtab->find(name));
+      auto *defined = symtab->find(name);
       if (sym && defined && sym->getFile() != defined->getFile()) {
         bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
         bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
