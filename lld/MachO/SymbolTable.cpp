@@ -124,11 +124,11 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
         //        }
       }
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
-      overridesWeakDef = !isWeakDef && dysym->isWeakDef();
-      dysym->unreference();
       // Dylib symbols take priority over lazy archiver member
       if (file->lazyArchiveMember.load(std::memory_order_relaxed))
         return defined;
+      overridesWeakDef = !isWeakDef && dysym->isWeakDef();
+      dysym->unreference();
     } else if (auto *undef = dyn_cast<Undefined>(s)) {
       // Preserve the original bitcode file name (instead of using the object
       // file name).
@@ -217,9 +217,9 @@ Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
   auto *s = find(name);
   if (!s) {
     RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
-    s = reinterpret_cast<Symbol *>(new SymbolUnion());
-    replaceSymbol<Undefined>(s, name, file, refState,
-                             /*wasBitcodeSymbol=*/false);
+    auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
+    s = replaceSymbol<Undefined>(sym, name, file, refState,
+                                 /*wasBitcodeSymbol=*/false);
     typename decltype(symMap)::const_accessor accessor;
     symMap.insert(accessor, {CachedHashStringRef(name), s});
   }
@@ -260,8 +260,9 @@ Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
                                     bool isPrivateExtern) {
   auto *s = find(name);
   if (!s) {
-    s = reinterpret_cast<Symbol *>(new SymbolUnion());
-    replaceSymbol<CommonSymbol>(s, name, file, size, align, isPrivateExtern);
+    auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
+    s = replaceSymbol<CommonSymbol>(sym, name, file, size, align,
+                                    isPrivateExtern);
     typename decltype(symMap)::const_accessor accessor;
     symMap.insert(accessor, {CachedHashStringRef(name), s});
   }
