@@ -107,9 +107,11 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
       } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
         // Defined symbols take priority over lazy archiver member
         if (defined->getFile()->lazyArchiveMember.load(
-                std::memory_order_relaxed))
+                std::memory_order_relaxed)) {
           if (file->priority < defined->getFile()->priority)
             return defined;
+        } else
+          return defined;
       } else {
         //        std::string srcLoc1 = defined->getSourceLocation();
         //        std::string srcLoc2 = isec ? isec->getSourceLocation(value) :
@@ -160,22 +162,6 @@ Defined *SymbolTable::addDefinedEager(
   bool interposable = config->namespaceKind == NamespaceKind::flat &&
                       config->outputType != MachO::MH_EXECUTE &&
                       !isPrivateExtern;
-  Symbol *s = find(name);
-  if (s) {
-    if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
-      overridesWeakDef = !isWeakDef && dysym->isWeakDef();
-    } else if (auto *undef = dyn_cast<Undefined>(s)) {
-      // Preserve the original bitcode file name (instead of using the object
-      // file name).
-      if (undef->wasBitcodeSymbol)
-        file = undef->getFile();
-      return replaceSymbol<Defined>(
-          s, name, file, isec, value, size, isWeakDef, /*isExternal=*/true,
-          isPrivateExtern, /*includeInSymtab=*/true, isThumb,
-          isReferencedDynamically, noDeadStrip, overridesWeakDef,
-          isWeakDefCanBeHidden, interposable);
-    }
-  }
   auto *defined = new Defined(
       name, file, isec, value, size, isWeakDef,
       /*isExternal=*/true, isPrivateExtern,
@@ -214,16 +200,14 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
 
 Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
                                        bool isWeakRef) {
-  auto *s = find(name);
-  if (!s) {
-    RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
-    auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
-    s = replaceSymbol<Undefined>(sym, name, file, refState,
-                                 /*wasBitcodeSymbol=*/false);
-    typename decltype(symMap)::const_accessor accessor;
-    symMap.insert(accessor, {CachedHashStringRef(name), s});
-  }
-  return s;
+  RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
+  typename decltype(symMap)::const_accessor accessor;
+  auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
+  symMap.insert(accessor,
+                {CachedHashStringRef(name),
+                 replaceSymbol<Undefined>(sym, name, file, refState,
+                                          /*wasBitcodeSymbol=*/false)});
+  return accessor->second;
 }
 
 void SymbolTable::markLive(StringRef name, InputFile *file) {
@@ -258,15 +242,12 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
 Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
                                     uint64_t size, uint32_t align,
                                     bool isPrivateExtern) {
-  auto *s = find(name);
-  if (!s) {
-    auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
-    s = replaceSymbol<CommonSymbol>(sym, name, file, size, align,
-                                    isPrivateExtern);
-    typename decltype(symMap)::const_accessor accessor;
-    symMap.insert(accessor, {CachedHashStringRef(name), s});
-  }
-  return s;
+  typename decltype(symMap)::const_accessor accessor;
+  auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
+  symMap.insert(accessor, {CachedHashStringRef(name),
+                           replaceSymbol<CommonSymbol>(
+                               sym, name, file, size, align, isPrivateExtern)});
+  return accessor->second;
 }
 
 Symbol *SymbolTable::addDylib(StringRef name, DylibFile *file, bool isWeakDef,
