@@ -138,6 +138,7 @@ public:
   // Returns the object file that this symbol was defined in. This value differs
   // from `getFile()` if the symbol originated from a bitcode file.
   ObjFile *getObjectFile() const;
+  void setFile(InputFile *f) { file = f; }
 
   std::string getSourceLocation();
 
@@ -180,9 +181,9 @@ public:
   bool interposable : 1;
 
   bool weakDefCanBeHidden : 1;
-
+  bool weakDef : 1;
+  
 private:
-  const bool weakDef : 1;
   const bool external : 1;
 
 public:

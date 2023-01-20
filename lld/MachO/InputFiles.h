@@ -191,6 +191,7 @@ public:
 private:
   llvm::once_flag initDwarf;
   SmallVector<unsigned, 32> undefineds;
+  std::vector<InputSection *> symToIsecs;
   template <class LP> void parseObjFileLinkerOption();
   template <class LP> void parse();
   template <class SectionHeader> void parseSections(ArrayRef<SectionHeader>);

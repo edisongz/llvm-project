@@ -1149,7 +1149,7 @@ void SymtabSection::emitStabs() {
     if (auto *defined = dyn_cast<Defined>(sym)) {
       // Excluded symbols should have been filtered out in finalizeContents().
       assert(defined->includeInSymtab);
-      
+
       if (defined->isAbsolute())
         continue;
 
@@ -1177,8 +1177,6 @@ void SymtabSection::emitStabs() {
   InputFile *lastFile = nullptr;
   for (SortingPair &pair : symbolsNeedingStabs) {
     Defined *defined = pair.first;
-    if (!defined->getFile())
-      continue;
     InputSection *isec = defined->isec;
     ObjFile *file = cast<ObjFile>(isec->getFile());
 

@@ -637,28 +637,6 @@ void ObjFile::parseRelocations(ArrayRef<SectionHeader> sectionHeaders,
   }
 }
 
-static uint64_t getRank(InputFile *file, bool isCommon, bool isWeak) {
-  if (!file)
-    return 7 << 24;
-
-  if (isCommon) {
-    if (file->lazyArchiveMember.load(std::memory_order_relaxed))
-      return (6 << 24) + file->priority;
-    return (5 << 24) + file->priority;
-  }
-
-  if (isa<DylibFile>(file) ||
-      file->lazyArchiveMember.load(std::memory_order_relaxed)) {
-    if (isWeak)
-      return (4 << 24) + file->priority;
-    return (3 << 24) + file->priority;
-  }
-
-  if (isWeak)
-    return (2 << 24) + file->priority;
-  return (1 << 24) + file->priority;
-}
-
 template <class NList>
 static macho::Symbol *createDefined(const NList &sym, StringRef name,
                                     InputSection *isec, uint64_t value,
@@ -826,6 +804,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
   // Groups indices of the symbols by the sections that contain them.
   std::vector<std::vector<uint32_t>> symbolsBySection(sections.size());
   symbols.resize(nList.size());
+  symToIsecs.resize(nList.size());
   for (uint32_t i = 0; i < nList.size(); ++i) {
     const NList &sym = nList[i];
 
@@ -873,6 +852,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         }
         symbols[symIndex] =
             createDefined(sym, name, isec, 0, isec->getSize(), forceHidden);
+        symToIsecs[symIndex] = isec;
       }
       continue;
     }
@@ -910,6 +890,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
         isec->hasAltEntry = symbolOffset != 0;
         symbols[symIndex] = createDefined(sym, name, isec, symbolOffset,
                                           symbolSize, forceHidden);
+        symToIsecs[symIndex] = isec;
         continue;
       }
       auto *concatIsec = cast<ConcatInputSection>(isec);
@@ -929,6 +910,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
       // subsection.
       symbols[symIndex] = createDefined(sym, name, nextIsec, /*value=*/0,
                                         symbolSize, forceHidden);
+      symToIsecs[symIndex] = nextIsec;
       // TODO: ld64 appears to preserve the original alignment as well as each
       // subsection's offset from the last aligned address. We should consider
       // emulating that behavior.
@@ -1136,6 +1118,11 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
         concatIsec->wasCoalesced = true;
         concatIsec->symbols.erase(llvm::find(concatIsec->symbols, sym));
       }
+    
+    if (sym && sym->isec->getFile()->lazyArchiveMember.load(std::memory_order_relaxed)) {
+      sym->setFile(this);
+      sym->isec = symToIsecs[i];
+    }
   }
 }
 

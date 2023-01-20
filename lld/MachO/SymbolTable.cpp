@@ -23,6 +23,28 @@ using namespace llvm;
 using namespace lld;
 using namespace lld::macho;
 
+static uint64_t getRank(InputFile *file, bool isCommon, bool isWeak) {
+  if (!file)
+    return 7 << 24;
+
+  if (isCommon) {
+    if (file->lazyArchiveMember.load(std::memory_order_relaxed))
+      return (6 << 24) + file->priority;
+    return (5 << 24) + file->priority;
+  }
+
+  if (isa<DylibFile>(file) ||
+      file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+    if (isWeak)
+      return (4 << 24) + file->priority;
+    return (3 << 24) + file->priority;
+  }
+
+  if (isWeak)
+    return (2 << 24) + file->priority;
+  return (1 << 24) + file->priority;
+}
+
 Symbol *SymbolTable::find(CachedHashStringRef cachedName) {
   typename decltype(symMap)::const_accessor accessor;
   if (!symMap.find(accessor, cachedName))
@@ -79,8 +101,8 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   if (!wasInserted) {
     if (auto *defined = dyn_cast<Defined>(s)) {
       if (isWeakDef) {
-        if (s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
-            !file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        if (getRank(file, false, isWeakDef) <
+            getRank(defined->getFile(), false, defined->weakDef)) {
           // Previous lazy archiver member will replace by defined symbol
           bool interposable = config->namespaceKind == NamespaceKind::flat &&
                               config->outputType != MachO::MH_EXECUTE &&
@@ -94,7 +116,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
         }
 
         // See further comment in createDefined() in InputFiles.cpp
-        if (defined->isWeakDef()) {
+        if (defined->weakDef) {
           defined->privateExtern &= isPrivateExtern;
           defined->weakDefCanBeHidden &= isWeakDefCanBeHidden;
           defined->referencedDynamically |= isReferencedDynamically;
@@ -103,7 +125,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
         return defined;
       }
 
-      if (defined->isWeakDef()) {
+      if (defined->weakDef) {
       } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
         // Defined symbols take priority over lazy archiver member
         if (defined->getFile()->lazyArchiveMember.load(
