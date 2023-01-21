@@ -158,6 +158,12 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
       // file name).
       if (undef->wasBitcodeSymbol)
         file = undef->getFile();
+    } else if (auto *common = dyn_cast<CommonSymbol>(s)) {
+      if (common->getFile()->lazyArchiveMember.load(
+              std::memory_order_relaxed) &&
+          file->lazyArchiveMember.load(std::memory_order_relaxed))
+        if (file->priority < common->getFile()->priority)
+          return nullptr;
     }
     // Defined symbols take priority over other types of symbols, so in case
     // of a name conflict, we fall through to the replaceSymbol() call below.

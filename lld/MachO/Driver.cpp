@@ -1169,6 +1169,12 @@ static void resolveSymbols() {
       if (!objFile->lazyArchiveMember.load(std::memory_order_relaxed))
         objFile->markLive();
   });
+  
+  parallelForEach(inputFiles, [](InputFile *file) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
+      if (!objFile->lazyArchiveMember.load(std::memory_order_relaxed))
+        objFile->resolveSymbols();
+  });
 
   std::atomic_thread_fence(std::memory_order_seq_cst);
   inputFiles.remove_if([&](const InputFile *file) {

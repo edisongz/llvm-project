@@ -1054,8 +1054,8 @@ template <class LP> void ObjFile::resolveDefineds() {
     if ((mSym.n_type & N_TYPE) != N_UNDF) {
       auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
       StringRef name = strtab + mSym.n_strx;
-      auto *defined = symtab->find(name);
-      if (sym && defined && sym->getFile() != defined->getFile()) {
+      auto *symInTab = symtab->find(name);
+      if (sym && symInTab && sym->getFile() != symInTab->getFile()) {
         bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
         bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
                                     (N_WEAK_DEF | N_WEAK_REF);
@@ -1118,8 +1118,10 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
         concatIsec->wasCoalesced = true;
         concatIsec->symbols.erase(llvm::find(concatIsec->symbols, sym));
       }
-    
-    if (sym && sym->isec->getFile()->lazyArchiveMember.load(std::memory_order_relaxed)) {
+
+    if (sym && sym->isec->getFile()->lazyArchiveMember.load(
+                   std::memory_order_relaxed)) {
+      // TODO: Preserve this file symbol
       sym->setFile(this);
       sym->isec = symToIsecs[i];
     }
