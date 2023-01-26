@@ -126,7 +126,8 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
       }
 
       if (defined->weakDef) {
-      } else if (file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+      } else if (file &&
+                 file->lazyArchiveMember.load(std::memory_order_relaxed)) {
         // Defined symbols take priority over lazy archiver member
         if (defined->getFile()->lazyArchiveMember.load(
                 std::memory_order_relaxed)) {
@@ -198,6 +199,8 @@ Defined *SymbolTable::addDefinedEager(
   defined->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   typename decltype(symMap)::const_accessor accessor;
   symMap.insert(accessor, {CachedHashStringRef(name), defined});
+  defined->isUsedInRegularObj |=
+      !accessor->second->getFile() || isa<ObjFile>(accessor->second->getFile());
   return defined;
 }
 
@@ -235,6 +238,7 @@ Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
                 {CachedHashStringRef(name),
                  replaceSymbol<Undefined>(sym, name, file, refState,
                                           /*wasBitcodeSymbol=*/false)});
+  sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   return accessor->second;
 }
 
@@ -275,6 +279,7 @@ Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
   symMap.insert(accessor, {CachedHashStringRef(name),
                            replaceSymbol<CommonSymbol>(
                                sym, name, file, size, align, isPrivateExtern)});
+  sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   return accessor->second;
 }
 
@@ -343,24 +348,6 @@ Symbol *SymbolTable::addLazyObject(StringRef name, InputFile &file) {
         extract(file, name);
       else
         replaceSymbol<LazyObject>(s, file, name);
-    }
-  }
-  return s;
-}
-
-Symbol *SymbolTable::addLazyObjFile(StringRef name, InputFile *file) {
-  auto [s, wasInserted] = insert(name, file);
-
-  if (wasInserted) {
-    replaceSymbol<LazyObjFile>(s, file, name);
-  } else if (isa<Undefined>(s)) {
-    fastMarkLiveFile(*file, name);
-  } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
-    if (dysym->isWeakDef()) {
-      if (dysym->getRefState() != RefState::Unreferenced)
-        fastMarkLiveFile(*file, name);
-      else
-        replaceSymbol<LazyObjFile>(s, file, name);
     }
   }
   return s;

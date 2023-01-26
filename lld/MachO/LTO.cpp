@@ -11,6 +11,7 @@
 #include "Driver.h"
 #include "InputFiles.h"
 #include "Symbols.h"
+#include "SymbolTable.h"
 #include "Target.h"
 
 #include "lld/Common/Args.h"
@@ -90,6 +91,10 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     // Once IRObjectFile is fixed to report only one symbol this hack can
     // be removed.
     r.Prevailing = !objSym.isUndefined() && sym->getFile() == &f;
+    if (r.Prevailing)
+      if (auto *symInTab = symtab->find(sym->getName()))
+        if (!isa<Undefined>(symInTab) && symInTab->getFile() != &f)
+          r.Prevailing = 0;
 
     if (const auto *defined = dyn_cast<Defined>(sym)) {
       r.ExportDynamic =
@@ -106,10 +111,9 @@ void BitcodeCompiler::add(BitcodeFile &f) {
 
     // Un-define the symbol so that we don't get duplicate symbol errors when we
     // load the ObjFile emitted by LTO compilation.
-    if (r.Prevailing)
-      replaceSymbol<Undefined>(sym, sym->getName(), sym->getFile(),
-                               RefState::Strong, /*wasBitcodeSymbol=*/true);
-
+//    if (r.Prevailing)
+//      replaceSymbol<Undefined>(sym, sym->getName(), sym->getFile(),
+//                               RefState::Strong, /*wasBitcodeSymbol=*/true);
     // TODO: set the other resolution configs properly
   }
   checkError(ltoObj->add(std::move(f.obj), resols));
@@ -194,7 +198,7 @@ std::vector<ObjFile *> BitcodeCompiler::compile() {
     }
     auto objFile = new ObjFile(
         MemoryBufferRef(objBuf, saver().save(filePath.str())), modTime, "");
-    objFile->parseFile();
+    objFile->lazyArchiveMember.exchange(true, std::memory_order_relaxed);
     ret.push_back(objFile);
   }
 

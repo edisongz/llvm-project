@@ -2335,27 +2335,16 @@ void BitcodeFile::parse() {
   // Convert LTO Symbols to LLD Symbols in order to perform resolution. The
   // "winning" symbol will then be marked as Prevailing at LTO compilation
   // time.
-  symbols.clear();
-  for (const lto::InputFile::Symbol &objSym : obj->symbols()) {
-    if (objSym.isUndefined()) {
-      if (lazyArchiveMember.load(std::memory_order_relaxed)) {
-        symbols.push_back(nullptr);
-        continue;
-      }
-    }
-    symbols.push_back(createBitcodeSymbol(objSym, *this));
-  }
-
   parseObjCMember();
+  symbols.reserve(obj->symbols().size());
+  for (const lto::InputFile::Symbol &objSym : obj->symbols())
+    symbols.push_back(createBitcodeSymbol(objSym, *this));
 }
 
-void BitcodeFile::parseBitcodeFile() {
-  if (lazyArchiveMember.load(std::memory_order_relaxed))
-    parseLazyObjFile();
-  else
-    parse();
-
-  parseObjCMember();
+void BitcodeFile::markLiveBitcodeFile() {
+  for (Symbol *sym : symbols)
+    if (auto *undefined = dyn_cast<Undefined>(sym))
+      symtab->markLive(undefined->getName(), this);
 }
 
 void BitcodeFile::parseLazy() {
@@ -2364,16 +2353,6 @@ void BitcodeFile::parseLazy() {
     if (!objSym.isUndefined()) {
       symbols[i] = symtab->addLazyObject(saver().save(objSym.getName()), *this);
       if (!lazy)
-        break;
-    }
-  }
-}
-
-void BitcodeFile::parseLazyObjFile() {
-  for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
-    if (!objSym.isUndefined()) {
-      symtab->addLazyObjFile(saver().save(objSym.getName()), this);
-      if (!lazyArchiveMember.load(std::memory_order_relaxed))
         break;
     }
   }
@@ -2391,7 +2370,7 @@ void macho::fastMarkLiveFile(InputFile &file, StringRef reason) {
     return;
 
   if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    // TODO: mark bitcode file alive
+    bitcode->markLiveBitcodeFile();
   } else {
     auto &f = cast<ObjFile>(file);
     f.markLive();

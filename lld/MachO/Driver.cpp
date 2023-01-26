@@ -544,6 +544,8 @@ static bool compileBitcodeFiles() {
         lto->add(*bitcodeFile);
 
   std::vector<ObjFile *> compiled = lto->compile();
+  parallelForEach(compiled, [](ObjFile *file) { file->parseFile(); });
+
   for (ObjFile *file : compiled)
     inputFiles.insert(file);
 
@@ -1159,6 +1161,8 @@ static void parseInputFiles() {
 
 static void resolveSymbols() {
   TimeTraceScope timeScope("Resolve symbols");
+  compileBitcodeFiles();
+
   parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       objFile->resolveSymbols();
@@ -1864,8 +1868,8 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     // corresponding bitcode symbol is hidden. In particular, this happens for
     // cross-module references to hidden symbols under ThinLTO. Thus, if we
     // compiled any bitcode files, we must redo the symbol hiding.
-    if (compileBitcodeFiles())
-      handleExplicitExports();
+    //    if (compileBitcodeFiles())
+    //      handleExplicitExports();
     replaceCommonSymbols();
 
     StringRef orderFile = args.getLastArgValue(OPT_order_file);

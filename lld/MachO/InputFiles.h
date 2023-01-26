@@ -321,14 +321,13 @@ public:
                        bool forceHidden = false);
   static bool classof(const InputFile *f) { return f->kind() == BitcodeKind; }
   void parse();
-  void parseBitcodeFile();
+  void markLiveBitcodeFile();
 
   std::unique_ptr<llvm::lto::InputFile> obj;
   bool forceHidden;
 
 private:
   void parseLazy();
-  void parseLazyObjFile();
 };
 
 extern llvm::SetVector<InputFile *> inputFiles;
