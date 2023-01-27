@@ -934,11 +934,11 @@ OpaqueFile::OpaqueFile(MemoryBufferRef mb, StringRef segName,
     : InputFile(OpaqueKind, mb) {
   const auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
   ArrayRef<uint8_t> data = {buf, mb.getBufferSize()};
-  sections.push_back(make<Section>(/*file=*/this, segName.take_front(16),
-                                   sectName.take_front(16),
-                                   /*flags=*/0, /*addr=*/0));
+  sections.push_back(new Section(/*file=*/this, segName.take_front(16),
+                                 sectName.take_front(16),
+                                 /*flags=*/0, /*addr=*/0));
   Section &section = *sections.back();
-  ConcatInputSection *isec = make<ConcatInputSection>(section, data);
+  ConcatInputSection *isec = new ConcatInputSection(section, data);
   isec->live = true;
   section.subsections.push_back({0, isec});
 }
@@ -1108,15 +1108,19 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
   auto *c = reinterpret_cast<const symtab_command *>(cmd);
   ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
                         c->nsyms);
+  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
   for (const auto &[i, mSym] : llvm::enumerate(nList)) {
     if (!(mSym.n_type & N_EXT) || (mSym.n_type & N_TYPE) != N_SECT ||
         !(mSym.n_desc & N_WEAK_DEF))
       continue;
     auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
-    if (sym && sym->getFile() != this)
-      if (auto concatIsec = dyn_cast_or_null<ConcatInputSection>(sym->isec)) {
+    StringRef name = strtab + mSym.n_strx;
+    auto *definedInTab = dyn_cast_or_null<Defined>(symtab->find(name));
+    if (definedInTab && definedInTab->getFile() != this)
+      if (auto *concatIsec =
+              dyn_cast_or_null<ConcatInputSection>(symToIsecs[i])) {
         concatIsec->wasCoalesced = true;
-        concatIsec->symbols.erase(llvm::find(concatIsec->symbols, sym));
+        concatIsec->symbols.clear();
       }
 
     if (sym && sym->isec->getFile()->lazyArchiveMember.load(
@@ -1124,6 +1128,25 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
       // TODO: Preserve this file symbol
       sym->setFile(this);
       sym->isec = symToIsecs[i];
+    }
+  }
+
+  // Mark weak defined referent nullptr
+  for (Section *section : sections) {
+    for (Subsection &subsection : section->subsections) {
+      if (!isa<ConcatInputSection>(subsection.isec))
+        continue;
+      ConcatInputSection *isec = cast<ConcatInputSection>(subsection.isec);
+      for (Reloc &r : isec->relocs) {
+        if (!r.referent.is<Symbol *>())
+          continue;
+        if (auto *defined =
+                dyn_cast_or_null<Defined>(r.referent.get<macho::Symbol *>()))
+          if (const auto *concatIsec =
+                  dyn_cast_or_null<ConcatInputSection>(defined->isec))
+            if (concatIsec->isCoalescedWeak())
+              r.referent = nullptr;
+      }
     }
   }
 }
@@ -2053,7 +2076,7 @@ DylibFile *DylibFile::getSyntheticDylib(StringRef installName,
       return dylib;
     }
 
-  auto *dylib = make<DylibFile>(umbrella == this ? nullptr : umbrella);
+  auto *dylib = new DylibFile(umbrella == this ? nullptr : umbrella);
   dylib->installName = saver().save(installName);
   dylib->currentVersion = currentVersion;
   dylib->compatibilityVersion = compatVersion;
