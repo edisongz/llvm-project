@@ -1153,6 +1153,14 @@ void SymtabSection::emitStabs() {
       if (defined->isAbsolute())
         continue;
 
+      if (!defined->isec->parent)
+        continue;
+
+      if (defined->isec->getFile() &&
+          defined->isec->getFile()->lazyArchiveMember.load(
+              std::memory_order_relaxed))
+        continue;
+
       // Constant-folded symbols go in the executable's symbol table, but don't
       // get a stabs entry.
       if (defined->wasIdenticalCodeFolded)
@@ -1341,6 +1349,8 @@ template <class LP> void SymtabSectionImpl<LP>::writeTo(uint8_t *buf) const {
         nList->n_sect = NO_SECT;
         nList->n_value = defined->value;
       } else {
+        if (!defined->isec->parent)
+          continue;
         nList->n_type = scope | N_SECT;
         nList->n_sect = defined->isec->parent->index;
         // For the N_SECT symbol type, n_value is the address of the symbol
@@ -1849,18 +1859,18 @@ ObjCImageInfoSection::parseImageInfo(const InputFile *file) {
 
 static std::string swiftVersionString(uint8_t version) {
   switch (version) {
-    case 1:
-      return "1.0";
-    case 2:
-      return "1.1";
-    case 3:
-      return "2.0";
-    case 4:
-      return "3.0";
-    case 5:
-      return "4.0";
-    default:
-      return ("0x" + Twine::utohexstr(version)).str();
+  case 1:
+    return "1.0";
+  case 2:
+    return "1.1";
+  case 3:
+    return "2.0";
+  case 4:
+    return "3.0";
+  case 5:
+    return "4.0";
+  default:
+    return ("0x" + Twine::utohexstr(version)).str();
   }
 }
 
