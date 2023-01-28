@@ -335,7 +335,7 @@ private:
   // or to the combined index (for ThinLTO).
   struct GlobalResolution {
     /// The unmangled name of the global.
-    std::string IRName;
+    StringRef IRName;
 
     /// Keep track if the symbol is visible outside of a module with a summary
     /// (i.e. in either a regular object or a regular LTO module without a

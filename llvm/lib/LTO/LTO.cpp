@@ -556,7 +556,7 @@ void LTO::addModuleToGlobalRes(ArrayRef<InputFile::Symbol> Syms,
       assert(!GlobalRes.Prevailing &&
              "Multiple prevailing defs are not allowed");
       GlobalRes.Prevailing = true;
-      GlobalRes.IRName = std::string(Sym.getIRName());
+      GlobalRes.IRName = Sym.getIRName();
     } else if (!GlobalRes.Prevailing && GlobalRes.IRName.empty()) {
       // Sometimes it can be two copies of symbol in a module and prevailing
       // symbol can have no IR name. That might happen if symbol is defined in
@@ -564,7 +564,7 @@ void LTO::addModuleToGlobalRes(ArrayRef<InputFile::Symbol> Syms,
       // the same symbol we want to use IR name of the prevailing symbol.
       // Otherwise, if we haven't seen a prevailing symbol, set the name so that
       // we can later use it to check if there is any prevailing copy in IR.
-      GlobalRes.IRName = std::string(Sym.getIRName());
+      GlobalRes.IRName = Sym.getIRName();
     }
 
     // In rare occasion, the symbol used to initialize GlobalRes has a different

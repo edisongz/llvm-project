@@ -192,7 +192,7 @@ private:
   std::unique_ptr<GVMaterializer>
   Materializer;                   ///< Used to materialize GlobalValues
   std::string ModuleID;           ///< Human readable identifier for the module
-  std::string SourceFileName;     ///< Original source file name for module,
+  StringRef SourceFileName;       ///< Original source file name for module,
                                   ///< recorded in bitcode.
   std::string TargetTriple;       ///< Platform target triple Module compiled on
                                   ///< Format: (arch)(sub)-(vendor)-(sys0-(abi)
@@ -236,7 +236,7 @@ public:
   /// bitcode, this is taken from a bitcode record where it was recorded.
   /// For other compiles it is the same as the ModuleID, which would
   /// contain the source file name.
-  const std::string &getSourceFileName() const { return SourceFileName; }
+  const StringRef &getSourceFileName() const { return SourceFileName; }
 
   /// Get a short "name" for the module.
   ///
@@ -291,7 +291,7 @@ public:
   void setModuleIdentifier(StringRef ID) { ModuleID = std::string(ID); }
 
   /// Set the module's original source file name.
-  void setSourceFileName(StringRef Name) { SourceFileName = std::string(Name); }
+  void setSourceFileName(StringRef Name) { SourceFileName = Name; }
 
   /// Set the data layout
   void setDataLayout(StringRef Desc);
