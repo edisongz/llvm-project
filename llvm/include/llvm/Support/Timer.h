@@ -81,8 +81,8 @@ public:
 class Timer {
   TimeRecord Time;          ///< The total time captured.
   TimeRecord StartTime;     ///< The time startTimer() was last called.
-  StringRef Name;           ///< The name of this time variable.
-  StringRef Description;    ///< Description of this time variable.
+  std::string Name;         ///< The name of this time variable.
+  std::string Description;  ///< Description of this time variable.
   bool Running = false;     ///< Is the timer currently running?
   bool Triggered = false;   ///< Has the timer ever been triggered?
   TimerGroup *TG = nullptr; ///< The TimerGroup this Timer is in.
@@ -110,8 +110,8 @@ public:
   void init(StringRef TimerName, StringRef TimerDescription);
   void init(StringRef TimerName, StringRef TimerDescription, TimerGroup &tg);
 
-  const StringRef &getName() const { return Name; }
-  const StringRef &getDescription() const { return Description; }
+  const std::string &getName() const { return Name; }
+  const std::string &getDescription() const { return Description; }
   bool isInitialized() const { return TG != nullptr; }
 
   /// Check if the timer is currently running.
@@ -175,21 +175,21 @@ struct NamedRegionTimer : public TimeRegion {
 class TimerGroup {
   struct PrintRecord {
     TimeRecord Time;
-    StringRef Name;
-    StringRef Description;
+    std::string Name;
+    std::string Description;
 
     PrintRecord(const PrintRecord &Other) = default;
     PrintRecord &operator=(const PrintRecord &Other) = default;
-    PrintRecord(const TimeRecord &Time, StringRef name,
-                StringRef description)
-      : Time(Time), Name(name), Description(description) {}
+    PrintRecord(const TimeRecord &Time, const std::string &Name,
+                const std::string &Description)
+      : Time(Time), Name(Name), Description(Description) {}
 
     bool operator <(const PrintRecord &Other) const {
       return Time < Other.Time;
     }
   };
-  StringRef Name;
-  StringRef Description;
+  std::string Name;
+  std::string Description;
   Timer *FirstTimer = nullptr; ///< First timer in the group.
   std::vector<PrintRecord> TimersToPrint;
 
@@ -207,8 +207,8 @@ public:
   ~TimerGroup();
 
   void setName(StringRef NewName, StringRef NewDescription) {
-    Name = NewName;
-    Description = NewDescription;
+    Name.assign(NewName.begin(), NewName.end());
+    Description.assign(NewDescription.begin(), NewDescription.end());
   }
 
   /// Print any started timers in this group, optionally resetting timers after

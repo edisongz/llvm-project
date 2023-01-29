@@ -266,8 +266,8 @@ void LLVMSetModuleIdentifier(LLVMModuleRef M, const char *Ident, size_t Len) {
 
 const char *LLVMGetSourceFileName(LLVMModuleRef M, size_t *Len) {
   auto &Str = unwrap(M)->getSourceFileName();
-  *Len = Str.size();
-  return Str.data();
+  *Len = Str.length();
+  return Str.c_str();
 }
 
 void LLVMSetSourceFileName(LLVMModuleRef M, const char *Name, size_t Len) {

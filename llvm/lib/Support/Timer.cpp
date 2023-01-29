@@ -136,8 +136,8 @@ void Timer::init(StringRef TimerName, StringRef TimerDescription) {
 void Timer::init(StringRef TimerName, StringRef TimerDescription,
                  TimerGroup &tg) {
   assert(!TG && "Timer already initialized");
-  Name = TimerName;
-  Description = TimerDescription;
+  Name.assign(TimerName.begin(), TimerName.end());
+  Description.assign(TimerDescription.begin(), TimerDescription.end());
   Running = Triggered = false;
   TG = &tg;
   TG->addTimer(*this);
@@ -284,9 +284,9 @@ NamedRegionTimer::NamedRegionTimer(StringRef Name, StringRef Description,
 /// ctor/dtor and is protected by the TimerLock lock.
 static TimerGroup *TimerGroupList = nullptr;
 
-TimerGroup::TimerGroup(StringRef name, StringRef description)
-  : Name(name),
-    Description(description) {
+TimerGroup::TimerGroup(StringRef Name, StringRef Description)
+  : Name(Name.begin(), Name.end()),
+    Description(Description.begin(), Description.end()) {
   // Add the group to TimerGroupList.
   sys::SmartScopedLock<true> L(*TimerLock);
   if (TimerGroupList)
@@ -366,7 +366,7 @@ void TimerGroup::PrintQueuedTimers(raw_ostream &OS) {
   // Print out timing header.
   OS << "===" << std::string(73, '-') << "===\n";
   // Figure out how many spaces to indent TimerGroup name.
-  unsigned Padding = (80-Description.size())/2;
+  unsigned Padding = (80-Description.length())/2;
   if (Padding > 80) Padding = 0;         // Don't allow "negative" numbers
   OS.indent(Padding) << Description << '\n';
   OS << "===" << std::string(73, '-') << "===\n";
