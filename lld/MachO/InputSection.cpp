@@ -167,8 +167,6 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
 
   for (size_t i = 0; i < relocs.size(); i++) {
     const Reloc &r = relocs[i];
-    if (!r.referent)
-      continue;
     uint8_t *loc = buf + r.offset;
     uint64_t referentVA = 0;
 
@@ -177,8 +175,6 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
     if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
       const Symbol *fromSym = r.referent.get<Symbol *>();
       const Reloc &minuend = relocs[++i];
-      if (!minuend.referent)
-        continue;
       uint64_t minuendVA;
       if (const Symbol *toSym = minuend.referent.dyn_cast<Symbol *>())
         minuendVA = toSym->getVA() + minuend.addend;
@@ -189,9 +185,6 @@ void ConcatInputSection::writeTo(uint8_t *buf) {
       }
       referentVA = minuendVA - fromSym->getVA();
     } else if (auto *referentSym = r.referent.dyn_cast<Symbol *>()) {
-      if (auto *defined = dyn_cast<Defined>(referentSym))
-        if (!defined->isec || !defined->isec->parent)
-          continue;
       if (target->hasAttr(r.type, RelocAttrBits::LOAD) &&
           !referentSym->isInGot())
         target->relaxGotLoad(loc, r.type);

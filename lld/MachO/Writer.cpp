@@ -679,10 +679,6 @@ void Writer::scanRelocations() {
         continue;
       }
       if (auto *sym = r.referent.dyn_cast<Symbol *>()) {
-        if (auto *d = dyn_cast<Defined>(sym))
-          if (auto *isec = dyn_cast_or_null<ConcatInputSection>(d->isec))
-            if (isec->shouldOmitFromOutput())
-              continue;
         if (auto *undefined = dyn_cast<Undefined>(sym))
           treatUndefinedSymbol(*undefined, isec, r.offset);
         // treatUndefinedSymbol() can replace sym with a DylibSymbol; re-check.

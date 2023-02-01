@@ -347,8 +347,7 @@ void UnwindInfoSectionImpl::relocateCompactUnwind(
     CompactUnwindEntry &cu = cuEntries[i];
     const Defined *d = symbolsVec[i].second;
     cu.functionAddress = d->getVA();
-    if (!d->unwindEntry || !d->getFile() ||
-        d->getFile()->lazyArchiveMember.load(std::memory_order_relaxed))
+    if (!d->unwindEntry || !d->getFile())
       return;
 
     // If we have DWARF unwind info, create a CU entry that points to it.
@@ -372,13 +371,9 @@ void UnwindInfoSectionImpl::relocateCompactUnwind(
       if (r.offset == cuOffsets.personality) {
         cu.personality = r.referent.get<Symbol *>();
       } else if (r.offset == cuOffsets.lsda) {
-        if (auto *referentSym = r.referent.dyn_cast<Symbol *>()) {
-          if (referentSym->getFile() &&
-              referentSym->getFile()->lazyArchiveMember.load(
-                  std::memory_order_relaxed))
-            continue;
+        if (auto *referentSym = r.referent.dyn_cast<Symbol *>())
           cu.lsda = cast<Defined>(referentSym)->isec;
-        } else
+        else
           cu.lsda = r.referent.get<InputSection *>();
       }
     }

@@ -133,8 +133,6 @@ bool TextOutputSection::needsThunks() const {
   // Yes, this program is large enough to need thunks.
   for (ConcatInputSection *isec : inputs) {
     for (Reloc &r : isec->relocs) {
-      if (!r.referent)
-        continue;
       if (!target->hasAttr(r.type, RelocAttrBits::BRANCH))
         continue;
       auto *sym = r.referent.get<Symbol *>();
@@ -274,8 +272,6 @@ void TextOutputSection::finalize() {
 //    assert(is_sorted(relocs,
 //                     [](Reloc &a, Reloc &b) { return a.offset > b.offset; }));
     for (Reloc &r : reverse(relocs)) {
-      if (!r.referent)
-        continue;
       ++relocCount;
       if (!target->hasAttr(r.type, RelocAttrBits::BRANCH))
         continue;
@@ -287,10 +283,6 @@ void TextOutputSection::finalize() {
       uint64_t highVA = callVA + forwardBranchRange;
       // Calculate our call referent address
       auto *funcSym = r.referent.get<Symbol *>();
-      if (auto *d = dyn_cast<Defined>(funcSym))
-        if (auto *concatIsec = dyn_cast_or_null<ConcatInputSection>(d->isec))
-          if (concatIsec->isCoalescedWeak())
-            continue;
       ThunkInfo &thunkInfo = thunkMap[funcSym];
       // The referent is not reachable, so we need to use a thunk ...
       if (funcSym->isInStubs() && callVA >= stubsInRangeVA) {
@@ -335,14 +327,11 @@ void TextOutputSection::finalize() {
       StringRef thunkName = saver().save(funcSym->getName() + ".thunk." +
                                          std::to_string(thunkInfo.sequence++));
       if (!isa<Defined>(funcSym) || cast<Defined>(funcSym)->isExternal()) {
-        if (auto *d = dyn_cast_or_null<Defined>(symtab->find(thunkName)))
-          r.referent = thunkInfo.sym = d;
-        else
-          r.referent = thunkInfo.sym = symtab->addDefined(
-              thunkName, /*file=*/nullptr, thunkInfo.isec, /*value=*/0, thunkSize,
-              /*isWeakDef=*/false, /*isPrivateExtern=*/true,
-              /*isThumb=*/false, /*isReferencedDynamically=*/false,
-              /*noDeadStrip=*/false, /*isWeakDefCanBeHidden=*/false);
+        r.referent = thunkInfo.sym = symtab->addDefined(
+            thunkName, /*file=*/nullptr, thunkInfo.isec, /*value=*/0, thunkSize,
+            /*isWeakDef=*/false, /*isPrivateExtern=*/true,
+            /*isThumb=*/false, /*isReferencedDynamically=*/false,
+            /*noDeadStrip=*/false, /*isWeakDefCanBeHidden=*/false);
       } else {
         r.referent = thunkInfo.sym = make<Defined>(
             thunkName, /*file=*/nullptr, thunkInfo.isec, /*value=*/0, thunkSize,
