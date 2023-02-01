@@ -128,13 +128,15 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
       if (defined->weakDef) {
       } else if (file &&
                  file->lazyArchiveMember.load(std::memory_order_relaxed)) {
-        // Defined symbols take priority over lazy archiver member
-        if (defined->getFile()->lazyArchiveMember.load(
-                std::memory_order_relaxed)) {
-          if (file->priority < defined->getFile()->priority)
+        if (!isa<BitcodeFile>(defined->getFile())) {
+          // Defined symbols take priority over lazy archiver member
+          if (defined->getFile()->lazyArchiveMember.load(
+                  std::memory_order_relaxed)) {
+            if (file->priority < defined->getFile()->priority)
+              return defined;
+          } else
             return defined;
-        } else
-          return defined;
+        }
       } else {
         //        std::string srcLoc1 = defined->getSourceLocation();
         //        std::string srcLoc2 = isec ? isec->getSourceLocation(value) :
@@ -238,7 +240,7 @@ Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
                 {CachedHashStringRef(name),
                  replaceSymbol<Undefined>(sym, name, file, refState,
                                           /*wasBitcodeSymbol=*/false)});
-  sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
+  accessor->second->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   return accessor->second;
 }
 
@@ -279,7 +281,7 @@ Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
   symMap.insert(accessor, {CachedHashStringRef(name),
                            replaceSymbol<CommonSymbol>(
                                sym, name, file, size, align, isPrivateExtern)});
-  sym->isUsedInRegularObj |= !file || isa<ObjFile>(file);
+  accessor->second->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   return accessor->second;
 }
 
