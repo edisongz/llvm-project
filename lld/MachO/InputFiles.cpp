@@ -105,6 +105,16 @@ SetVector<InputFile *> macho::inputFiles;
 std::unique_ptr<TarWriter> macho::tar;
 int InputFile::idCount = 0;
 
+static uint64_t getSymbolRank(InputFile *file) {
+  if (!file)
+    return (3 << 24);
+
+  if (file->lazyArchiveMember.load(std::memory_order_relaxed))
+    return (2 << 24) + file->priority;
+
+  return (1 << 24) + file->priority;
+}
+
 static VersionTuple decodeVersion(uint32_t version) {
   unsigned major = version >> 16;
   unsigned minor = (version >> 8) & 0xffu;
@@ -1055,7 +1065,9 @@ template <class LP> void ObjFile::resolveDefineds() {
       auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
       StringRef name = strtab + mSym.n_strx;
       auto *symInTab = symtab->find(name);
-      if (sym && symInTab && sym->getFile() != symInTab->getFile()) {
+      if (sym && symInTab &&
+          (sym->getFile() != symInTab->getFile() ||
+           getSymbolRank(this) < getSymbolRank(symInTab->getFile()))) {
         bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
         bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
                                     (N_WEAK_DEF | N_WEAK_REF);
@@ -1064,7 +1076,7 @@ template <class LP> void ObjFile::resolveDefineds() {
           isWeakDefCanBeHidden = false;
         else if (isWeakDefCanBeHidden)
           isPrivateExtern = true;
-        symtab->addDefined(name, this, sym->isec, sym->value, sym->size,
+        symtab->addDefined(name, this, symToIsecs[i], sym->value, sym->size,
                            isWeakDef, isPrivateExtern,
                            mSym.n_desc & N_ARM_THUMB_DEF,
                            mSym.n_desc & REFERENCED_DYNAMICALLY,
@@ -1116,25 +1128,15 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
     auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
     StringRef name = strtab + mSym.n_strx;
     auto *definedInTab = dyn_cast_or_null<Defined>(symtab->find(name));
-    if (definedInTab &&
-        !definedInTab->getFile()->lazyArchiveMember.load(
-            std::memory_order_relaxed) &&
-        definedInTab->getFile() != this)
+    if (definedInTab && definedInTab->getFile() != this)
       if (auto *concatIsec =
               dyn_cast_or_null<ConcatInputSection>(symToIsecs[i])) {
         concatIsec->wasCoalesced = true;
         concatIsec->symbols.clear();
       }
-
-    if (sym && sym->isec->getFile()->lazyArchiveMember.load(
-                   std::memory_order_relaxed)) {
-      // TODO: Preserve this file symbol
-      sym->setFile(this);
-      sym->isec = symToIsecs[i];
-    }
   }
 
-  // Mark weak defined referent nullptr
+  // Mark weak defined referent symbol in table
   for (Section *section : sections) {
     for (Subsection &subsection : section->subsections) {
       if (!isa<ConcatInputSection>(subsection.isec))
@@ -1145,7 +1147,7 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
           continue;
         if (auto *defined =
                 dyn_cast_or_null<Defined>(r.referent.get<macho::Symbol *>()))
-          if (::isCoalescedWeak(defined->isec))
+          if (defined->isExternal() && ::isCoalescedWeak(defined->isec))
             r.referent = symtab->find(defined->getName());
       }
     }
