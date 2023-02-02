@@ -1116,7 +1116,10 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
     auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
     StringRef name = strtab + mSym.n_strx;
     auto *definedInTab = dyn_cast_or_null<Defined>(symtab->find(name));
-    if (definedInTab && definedInTab->getFile() != this)
+    if (definedInTab &&
+        !definedInTab->getFile()->lazyArchiveMember.load(
+            std::memory_order_relaxed) &&
+        definedInTab->getFile() != this)
       if (auto *concatIsec =
               dyn_cast_or_null<ConcatInputSection>(symToIsecs[i])) {
         concatIsec->wasCoalesced = true;
@@ -1142,10 +1145,8 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
           continue;
         if (auto *defined =
                 dyn_cast_or_null<Defined>(r.referent.get<macho::Symbol *>()))
-          if (const auto *concatIsec =
-                  dyn_cast_or_null<ConcatInputSection>(defined->isec))
-            if (concatIsec->isCoalescedWeak())
-              r.referent = nullptr;
+          if (::isCoalescedWeak(defined->isec))
+            r.referent = symtab->find(defined->getName());
       }
     }
   }
