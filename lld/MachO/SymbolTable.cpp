@@ -193,16 +193,15 @@ Defined *SymbolTable::addDefinedEager(
   bool interposable = config->namespaceKind == NamespaceKind::flat &&
                       config->outputType != MachO::MH_EXECUTE &&
                       !isPrivateExtern;
-  auto *defined = new Defined(
-      name, file, isec, value, size, isWeakDef,
-      /*isExternal=*/true, isPrivateExtern,
-      /*includeInSymtab=*/true, isThumb, isReferencedDynamically, noDeadStrip,
-      overridesWeakDef, isWeakDefCanBeHidden, interposable);
-  defined->isUsedInRegularObj |= !file || isa<ObjFile>(file);
+  auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
   typename decltype(symMap)::const_accessor accessor;
-  symMap.insert(accessor, {CachedHashStringRef(name), defined});
-  defined->isUsedInRegularObj |=
-      !accessor->second->getFile() || isa<ObjFile>(accessor->second->getFile());
+  symMap.insert(accessor, {CachedHashStringRef(name), sym});
+  Defined *defined = replaceSymbol<Defined>(
+      accessor->second, name, file, isec, value, size, isWeakDef,
+      /*isExternal=*/true, isPrivateExtern, /*includeInSymtab=*/true, isThumb,
+      isReferencedDynamically, noDeadStrip, overridesWeakDef,
+      isWeakDefCanBeHidden, interposable);
+  defined->isUsedInRegularObj |= !file || isa<ObjFile>(file);
   return defined;
 }
 
@@ -263,6 +262,11 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
         if (file->priority < common->getFile()->priority)
           return s;
     } else if (isa<Defined>(s)) {
+      if (s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
+          !file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        replaceSymbol<CommonSymbol>(s, name, file, size, align,
+                                    isPrivateExtern);
+      }
       return s;
     }
     // Common symbols take priority over all non-Defined symbols, so in case of

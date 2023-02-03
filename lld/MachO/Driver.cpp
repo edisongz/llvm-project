@@ -1161,8 +1161,6 @@ static void parseInputFiles() {
 
 static void resolveSymbols() {
   TimeTraceScope timeScope("Resolve symbols");
-  compileBitcodeFiles();
-
   parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       objFile->resolveSymbols();
@@ -1822,6 +1820,7 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     initLLVM(); // must be run before any call to addFile()
     createFiles(args);
     parseInputFiles();
+    compileBitcodeFiles();
     resolveSymbols();
     markCoalescedSubsections();
 

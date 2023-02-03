@@ -1076,6 +1076,7 @@ template <class LP> void ObjFile::resolveDefineds() {
           isWeakDefCanBeHidden = false;
         else if (isWeakDefCanBeHidden)
           isPrivateExtern = true;
+        // TODO: Raw symbol value & size
         symtab->addDefined(name, this, symToIsecs[i], sym->value, sym->size,
                            isWeakDef, isPrivateExtern,
                            mSym.n_desc & N_ARM_THUMB_DEF,
@@ -1120,37 +1121,17 @@ template <class LP> void ObjFile::markCoalescedSubsections() {
   auto *c = reinterpret_cast<const symtab_command *>(cmd);
   ArrayRef<NList> nList(reinterpret_cast<const NList *>(buf + c->symoff),
                         c->nsyms);
-  const char *strtab = reinterpret_cast<const char *>(buf) + c->stroff;
   for (const auto &[i, mSym] : llvm::enumerate(nList)) {
     if (!(mSym.n_type & N_EXT) || (mSym.n_type & N_TYPE) != N_SECT ||
         !(mSym.n_desc & N_WEAK_DEF))
       continue;
-    auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
-    StringRef name = strtab + mSym.n_strx;
-    auto *definedInTab = dyn_cast_or_null<Defined>(symtab->find(name));
-    if (definedInTab && definedInTab->getFile() != this)
+    auto *defined = dyn_cast_or_null<Defined>(symbols[i]);
+    if (defined && defined->getFile() != this)
       if (auto *concatIsec =
               dyn_cast_or_null<ConcatInputSection>(symToIsecs[i])) {
         concatIsec->wasCoalesced = true;
-        concatIsec->symbols.clear();
+        concatIsec->symbols.erase(llvm::find(concatIsec->symbols, defined));
       }
-  }
-
-  // Mark weak defined referent symbol in table
-  for (Section *section : sections) {
-    for (Subsection &subsection : section->subsections) {
-      if (!isa<ConcatInputSection>(subsection.isec))
-        continue;
-      ConcatInputSection *isec = cast<ConcatInputSection>(subsection.isec);
-      for (Reloc &r : isec->relocs) {
-        if (!r.referent.is<Symbol *>())
-          continue;
-        if (auto *defined =
-                dyn_cast_or_null<Defined>(r.referent.get<macho::Symbol *>()))
-          if (defined->isExternal() && ::isCoalescedWeak(defined->isec))
-            r.referent = symtab->find(defined->getName());
-      }
-    }
   }
 }
 
