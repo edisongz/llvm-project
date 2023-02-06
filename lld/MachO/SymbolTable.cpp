@@ -138,17 +138,15 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
             return defined;
         }
       } else {
-        //        std::string srcLoc1 = defined->getSourceLocation();
-        //        std::string srcLoc2 = isec ? isec->getSourceLocation(value) :
-        //        ""; std::string srcFile1 = toString(defined->getFile());
-        //        std::string srcFile2 = toString(file);
-        //
-        //        {
-        //          std::scoped_lock lock(mu);
-        //          dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
-        //                                 make_pair(srcLoc2, srcFile2),
-        //                                 defined});
-        //        }
+        std::string srcLoc1 = defined->getSourceLocation();
+        std::string srcLoc2 = isec ? isec->getSourceLocation(value) : "";
+        std::string srcFile1 = toString(defined->getFile());
+        std::string srcFile2 = toString(file);
+        {
+          std::scoped_lock lock(mu);
+          dupSymDiags.push_back({make_pair(srcLoc1, srcFile1),
+                                 make_pair(srcLoc2, srcFile2), defined});
+        }
       }
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
       // Dylib symbols take priority over lazy archiver member

@@ -714,9 +714,7 @@ void Writer::scanSymbols() {
   for (auto iter = symtab->getSymbols().begin();
        iter != symtab->getSymbols().end(); ++iter) {
     if (auto *defined = dyn_cast<Defined>(iter->second)) {
-      if (!defined->isLive() ||
-          (defined->getFile() && defined->getFile()->lazyArchiveMember.load(
-                                     std::memory_order_relaxed)))
+      if (!defined->isLive())
         continue;
       defined->canonicalize();
       if (defined->overridesWeakDef)
