@@ -261,10 +261,15 @@ Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
           return s;
     } else if (isa<Defined>(s)) {
       if (s->getFile()->lazyArchiveMember.load(std::memory_order_relaxed) &&
-          !file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+          file->lazyArchiveMember.load(std::memory_order_relaxed)) {
+        if (file->priority < s->getFile()->priority)
+          replaceSymbol<CommonSymbol>(s, name, file, size, align,
+                                      isPrivateExtern);
+      } else if (s->getFile()->lazyArchiveMember.load(
+                     std::memory_order_relaxed) &&
+                 !file->lazyArchiveMember.load(std::memory_order_relaxed))
         replaceSymbol<CommonSymbol>(s, name, file, size, align,
                                     isPrivateExtern);
-      }
       return s;
     }
     // Common symbols take priority over all non-Defined symbols, so in case of
