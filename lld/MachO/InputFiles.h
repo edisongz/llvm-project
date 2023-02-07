@@ -170,6 +170,7 @@ public:
   void resolveSymbols();
   void markLive();
   void markCoalescedSections();
+  void markSymbolNotUsed();
 
   static bool classof(const InputFile *f) { return f->kind() == ObjKind; }
 

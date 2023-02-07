@@ -1174,6 +1174,12 @@ static void resolveSymbols() {
   
   parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
+      if (objFile->lazyArchiveMember.load(std::memory_order_relaxed))
+        objFile->markSymbolNotUsed();
+  });
+  
+  parallelForEach(inputFiles, [](InputFile *file) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
       if (!objFile->lazyArchiveMember.load(std::memory_order_relaxed))
         objFile->resolveSymbols();
   });

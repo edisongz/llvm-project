@@ -994,6 +994,12 @@ void ObjFile::markCoalescedSections() {
     markCoalescedSubsections<ILP32>();
 }
 
+void ObjFile::markSymbolNotUsed() {
+  for (Symbol *sym : symbols)
+    if (sym && sym->getFile() == this)
+      sym->used = false;
+}
+
 template <class LP> void ObjFile::parse() {
   using Header = typename LP::mach_header;
   using SegmentCommand = typename LP::segment_command;
