@@ -965,11 +965,11 @@ ObjFile::ObjFile(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
 }
 
 void ObjFile::parseFile() {
-  parseObjCMember();
   if (target->wordSize == 8)
     parse<LP64>();
   else
     parse<ILP32>();
+  parseObjCMember();
 }
 
 void ObjFile::resolveSymbols() {
@@ -2348,10 +2348,10 @@ void BitcodeFile::parse() {
   // Convert LTO Symbols to LLD Symbols in order to perform resolution. The
   // "winning" symbol will then be marked as Prevailing at LTO compilation
   // time.
-  parseObjCMember();
   symbols.reserve(obj->symbols().size());
   for (const lto::InputFile::Symbol &objSym : obj->symbols())
     symbols.push_back(createBitcodeSymbol(objSym, *this));
+  parseObjCMember();
 }
 
 void BitcodeFile::markLiveBitcodeFile() {
