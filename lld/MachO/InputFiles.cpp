@@ -747,23 +747,6 @@ static macho::Symbol *createAbsolute(const NList &sym, InputFile *file,
 }
 
 template <class NList>
-void ObjFile::resolveNonSectionSymbol(const NList &sym, const char *strtab) {
-  StringRef name = strtab + sym.n_strx;
-  uint8_t type = sym.n_type & N_TYPE;
-  bool isPrivateExtern = sym.n_type & N_PEXT || forceHidden;
-  switch (type) {
-  case N_UNDF:
-    sym.n_value == 0
-        ? symtab->addUndefined(name, this, sym.n_desc & N_WEAK_REF)
-        : symtab->addCommon(name, this, sym.n_value,
-                            1 << GET_COMM_ALIGN(sym.n_desc), isPrivateExtern);
-    break;
-  default:
-    break;
-  }
-}
-
-template <class NList>
 macho::Symbol *ObjFile::parseNonSectionSymbol(const NList &sym,
                                               const char *strtab) {
   StringRef name = StringRef(strtab + sym.n_strx);
@@ -1067,13 +1050,10 @@ template <class LP> void ObjFile::resolveDefineds() {
     if (!(mSym.n_type & N_EXT))
       continue;
 
+    StringRef name = strtab + mSym.n_strx;
     if ((mSym.n_type & N_TYPE) != N_UNDF) {
       auto *sym = dyn_cast_or_null<Defined>(symbols[i]);
-      StringRef name = strtab + mSym.n_strx;
-      auto *symInTab = symtab->find(name);
-      if (sym && symInTab &&
-          (sym->getFile() != symInTab->getFile() ||
-           getSymbolRank(this) < getSymbolRank(symInTab->getFile()))) {
+      if (sym && getSymbolRank(this) < getSymbolRank(sym->getFile())) {
         bool isWeakDef = (mSym.n_desc & N_WEAK_DEF);
         bool isWeakDefCanBeHidden = (mSym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) ==
                                     (N_WEAK_DEF | N_WEAK_REF);
@@ -1090,7 +1070,13 @@ template <class LP> void ObjFile::resolveDefineds() {
                            mSym.n_desc & N_NO_DEAD_STRIP, isWeakDefCanBeHidden);
       }
     } else {
-      resolveNonSectionSymbol(mSym, strtab);
+      if (mSym.n_value == 0) {
+        symtab->addUndefined(name, this, mSym.n_desc & N_WEAK_REF);
+      } else {
+        bool isPrivateExtern = mSym.n_type & N_PEXT || forceHidden;
+        symtab->addCommon(name, this, mSym.n_value,
+                          1 << GET_COMM_ALIGN(mSym.n_desc), isPrivateExtern);
+      }
     }
   }
 }

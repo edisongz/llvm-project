@@ -206,8 +206,6 @@ private:
   void parseRelocations(ArrayRef<SectionHeader> sectionHeaders,
                         const SectionHeader &, Section &);
   template <class LP> void resolveDefineds();
-  template <class NList>
-  void resolveNonSectionSymbol(const NList &sym, const char *strtab);
   template <class LP> void markLiveObjFile();
   template <class LP> void markCoalescedSubsections();
   void parseDebugInfo();
