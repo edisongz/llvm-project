@@ -241,11 +241,6 @@ Symbol *SymbolTable::addUndefinedEager(StringRef name, InputFile *file,
   return accessor->second;
 }
 
-void SymbolTable::markLive(StringRef name, InputFile *file) {
-  if (auto *defined = dyn_cast_or_null<Defined>(find(name)))
-    fastMarkLiveFile(*defined->getFile(), defined->getName());
-}
-
 Symbol *SymbolTable::addCommon(StringRef name, InputFile *file, uint64_t size,
                                uint32_t align, bool isPrivateExtern) {
   auto [s, wasInserted] = insert(name, file);

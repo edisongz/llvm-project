@@ -70,7 +70,6 @@ public:
 
   Symbol *addUndefined(StringRef name, InputFile *, bool isWeakRef);
   Symbol *addUndefinedEager(StringRef name, InputFile *, bool isWeakRef);
-  void markLive(StringRef name, InputFile *file);
 
   Symbol *addCommon(StringRef name, InputFile *, uint64_t size, uint32_t align,
                     bool isPrivateExtern);

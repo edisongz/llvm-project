@@ -1097,7 +1097,8 @@ template <class LP> void ObjFile::markLiveObjFile() {
   for (unsigned i : undefineds) {
     const NList &sym = nList[i];
     StringRef name = strtab + sym.n_strx;
-    symtab->markLive(name, this);
+    if (auto *defined = dyn_cast_or_null<Defined>(symtab->find(name)))
+      fastMarkLiveFile(*defined->getFile(), defined->getName());
   }
 }
 
@@ -2340,12 +2341,6 @@ void BitcodeFile::parse() {
   parseObjCMember();
 }
 
-void BitcodeFile::markLiveBitcodeFile() {
-  for (Symbol *sym : symbols)
-    if (auto *undefined = dyn_cast<Undefined>(sym))
-      symtab->markLive(undefined->getName(), this);
-}
-
 void BitcodeFile::parseLazy() {
   symbols.resize(obj->symbols().size());
   for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
@@ -2368,9 +2363,7 @@ void macho::fastMarkLiveFile(InputFile &file, StringRef reason) {
   if (!fastMarkLive(file.lazyArchiveMember))
     return;
 
-  if (auto *bitcode = dyn_cast<BitcodeFile>(&file)) {
-    bitcode->markLiveBitcodeFile();
-  } else {
+  if (isa<ObjFile>(file)) {
     auto &f = cast<ObjFile>(file);
     f.markLive();
   }
