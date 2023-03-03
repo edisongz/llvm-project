@@ -13,6 +13,8 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/GlobPattern.h"
 #include <string>
 #include <vector>
@@ -75,6 +77,23 @@ public:
 
   // Match s against the patterns.
   bool match(llvm::StringRef s) const;
+};
+
+/// Saves strings in the provided stable storage and returns a
+/// StringRef with a stable character pointer.
+class MallocStringSaver final {
+  llvm::MallocAllocator &Alloc;
+
+public:
+  MallocStringSaver(llvm::MallocAllocator &Alloc) : Alloc(Alloc) {}
+
+  llvm::MallocAllocator &getAllocator() const { return Alloc; }
+
+  // All returned strings are null-terminated: *save(S).end() == 0.
+  llvm::StringRef save(const char *S) { return save(llvm::StringRef(S)); }
+  llvm::StringRef save(llvm::StringRef S);
+  llvm::StringRef save(const llvm::Twine &S) { return save(llvm::StringRef(S.str())); }
+  llvm::StringRef save(const std::string &S) { return save(llvm::StringRef(S)); }
 };
 
 } // namespace lld

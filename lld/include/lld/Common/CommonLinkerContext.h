@@ -21,6 +21,7 @@
 
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
+#include "lld/Common/Strings.h"
 #include "llvm/Support/StringSaver.h"
 
 namespace llvm {
@@ -36,8 +37,11 @@ public:
 
   static void destroy();
 
+  // BumpPtrAllocaltor is not thread safe
   llvm::BumpPtrAllocator bAlloc;
   llvm::StringSaver saver{bAlloc};
+  llvm::MallocAllocator mAlloc;
+  MallocStringSaver lldSaver{mAlloc};
   llvm::DenseMap<void *, SpecificAllocBase *> instances;
 
   ErrorHandler e;
@@ -56,6 +60,8 @@ bool hasContext();
 
 inline llvm::StringSaver &saver() { return context().saver; }
 inline llvm::BumpPtrAllocator &bAlloc() { return context().bAlloc; }
+inline lld::MallocStringSaver &lldSaver() { return context().lldSaver; }
+inline llvm::MallocAllocator &mAlloc() { return context().mAlloc; }
 } // namespace lld
 
 #endif

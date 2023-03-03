@@ -75,3 +75,11 @@ void lld::saveBuffer(StringRef buffer, const Twine &path) {
     error("cannot create " + path + ": " + ec.message());
   os << buffer;
 }
+
+StringRef MallocStringSaver::save(StringRef S) {
+  char *P = Alloc.Allocate<char>(S.size() + 1);
+  if (!S.empty())
+    memcpy(P, S.data(), S.size());
+  P[S.size()] = '\0';
+  return StringRef(P, S.size());
+}
