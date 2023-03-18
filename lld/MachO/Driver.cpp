@@ -130,7 +130,7 @@ static Optional<StringRef> findFramework(StringRef name) {
         // only append suffix if realpath() succeeds
         Twine suffixed = location + suffix;
         if (fs::exists(suffixed))
-          return resolvedFrameworks[key] = saver().save(suffixed.str());
+          return resolvedFrameworks[key] = lldSaver().save(suffixed.str());
       }
       // Suffix lookup failed, fall through to the no-suffix case.
     }
@@ -167,7 +167,7 @@ getSearchPaths(unsigned optionCode, InputArgList &args,
         path::append(buffer, path);
         // Do not warn about paths that are computed via the syslib roots
         if (fs::is_directory(buffer)) {
-          paths.push_back(saver().save(buffer.str()));
+          paths.push_back(lldSaver().save(buffer.str()));
           found = true;
         }
       }
@@ -185,7 +185,7 @@ getSearchPaths(unsigned optionCode, InputArgList &args,
       SmallString<261> buffer(root);
       path::append(buffer, path);
       if (fs::is_directory(buffer))
-        paths.push_back(saver().save(buffer.str()));
+        paths.push_back(lldSaver().save(buffer.str()));
     }
   }
   return paths;
@@ -1171,13 +1171,13 @@ static void resolveSymbols() {
       if (!objFile->lazyArchiveMember.load(std::memory_order_relaxed))
         objFile->markLive();
   });
-  
+
   parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       if (objFile->lazyArchiveMember.load(std::memory_order_relaxed))
         objFile->markSymbolNotUsed();
   });
-  
+
   parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       if (!objFile->lazyArchiveMember.load(std::memory_order_relaxed))

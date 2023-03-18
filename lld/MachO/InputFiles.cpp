@@ -259,7 +259,8 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
 }
 
 InputFile::InputFile(Kind kind, const InterfaceFile &interface)
-    : id(idCount++), fileKind(kind), name(saver().save(interface.getPath())) {}
+    : id(idCount++), fileKind(kind),
+      name(lldSaver().save(interface.getPath())) {}
 
 void InputFile::parseObjCMember() {
   if (!config->forceLoadObjC) {
@@ -1832,7 +1833,7 @@ void DylibFile::parseExportedSymbols(uint32_t offset, uint32_t size) {
   std::vector<TrieEntry> entries;
   // Find all the $ld$* symbols to process first.
   parseTrie(buf + offset, size, [&](const Twine &name, uint64_t flags) {
-    StringRef savedName = saver().save(name);
+    StringRef savedName = lldSaver().save(name);
     if (handleLDSymbol(savedName))
       return;
     entries.push_back({savedName, flags});
@@ -1939,7 +1940,7 @@ DylibFile::DylibFile(const InterfaceFile &interface, DylibFile *umbrella,
     umbrella = this;
   this->umbrella = umbrella;
 
-  installName = saver().save(interface.getInstallName());
+  installName = lldSaver().save(interface.getInstallName());
   compatibilityVersion = interface.getCompatibilityVersion().rawValue();
   currentVersion = interface.getCurrentVersion().rawValue();
 
@@ -1961,7 +1962,7 @@ DylibFile::DylibFile(const InterfaceFile &interface, DylibFile *umbrella,
   exportingFile = isImplicitlyLinked(installName) ? this : umbrella;
   auto addSymbol = [&](const llvm::MachO::Symbol &symbol,
                        const Twine &name) -> void {
-    StringRef savedName = saver().save(name);
+    StringRef savedName = lldSaver().save(name);
     if (exportingFile->hiddenSymbols.contains(CachedHashStringRef(savedName)))
       return;
 
@@ -2054,7 +2055,7 @@ DylibFile *DylibFile::getSyntheticDylib(StringRef installName,
     }
 
   auto *dylib = new DylibFile(umbrella == this ? nullptr : umbrella);
-  dylib->installName = saver().save(installName);
+  dylib->installName = lldSaver().save(installName);
   dylib->currentVersion = currentVersion;
   dylib->compatibilityVersion = compatVersion;
   extraDylibs.push_back(dylib);
@@ -2147,13 +2148,14 @@ void DylibFile::handleLDPreviousSymbol(StringRef name, StringRef originalName) {
     //    ]
     // Since the symbols are sorted, adding them to the symtab in the given
     // order means the $ld$previous version of _zzz will prevail, as desired.
-    dylib->symbols.push_back(symtab->addDylib(
-        saver().save(symbolName), dylib, /*isWeakDef=*/false, /*isTlv=*/false));
+    dylib->symbols.push_back(symtab->addDylib(lldSaver().save(symbolName),
+                                              dylib, /*isWeakDef=*/false,
+                                              /*isTlv=*/false));
     return;
   }
 
   // A $ld$previous$ symbol without symbol name modifies the dylib it's in.
-  this->installName = saver().save(installName);
+  this->installName = lldSaver().save(installName);
   this->compatibilityVersion = newCompatibilityVersion;
 }
 
@@ -2166,7 +2168,7 @@ void DylibFile::handleLDInstallNameSymbol(StringRef name,
   if (!condition.consume_front("os") || version.tryParse(condition))
     warn("failed to parse os version, symbol '" + originalName + "' ignored");
   else if (version == config->platformInfo.minimum)
-    this->installName = saver().save(installName);
+    this->installName = lldSaver().save(installName);
 }
 
 void DylibFile::handleLDHideSymbol(StringRef name, StringRef originalName) {
@@ -2276,7 +2278,7 @@ void ArchiveFile::fetch(const llvm::object::Archive::Symbol &sym,
 
 static macho::Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
                                           BitcodeFile &file) {
-  StringRef name = saver().save(objSym.getName());
+  StringRef name = lldSaver().save(objSym.getName());
 
   if (objSym.isUndefined())
     return symtab->addUndefinedEager(name, &file,
@@ -2322,11 +2324,11 @@ BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
   // name from multiple different archives, and offset within the archive to
   // disambiguate two members of the same name from a single archive.
   MemoryBufferRef mbref(mb.getBuffer(),
-                        saver().save(archiveName.empty()
-                                         ? path
-                                         : archiveName +
-                                               sys::path::filename(path) +
-                                               utostr(offsetInArchive)));
+                        lldSaver().save(archiveName.empty()
+                                            ? path
+                                            : archiveName +
+                                                  sys::path::filename(path) +
+                                                  utostr(offsetInArchive)));
 
   obj = check(lto::InputFile::create(mbref));
 }
@@ -2345,7 +2347,8 @@ void BitcodeFile::parseLazy() {
   symbols.resize(obj->symbols().size());
   for (const auto &[i, objSym] : llvm::enumerate(obj->symbols())) {
     if (!objSym.isUndefined()) {
-      symbols[i] = symtab->addLazyObject(saver().save(objSym.getName()), *this);
+      symbols[i] =
+          symtab->addLazyObject(lldSaver().save(objSym.getName()), *this);
       if (!lazy)
         break;
     }

@@ -192,12 +192,12 @@ Optional<StringRef> macho::resolveDylibPath(StringRef dylibPath) {
   bool tbdExists = fs::exists(tbdPath);
   searchedDylib(tbdPath, tbdExists);
   if (tbdExists)
-    return saver().save(tbdPath.str());
+    return lldSaver().save(tbdPath.str());
 
   bool dylibExists = fs::exists(dylibPath);
   searchedDylib(dylibPath, dylibExists);
   if (dylibExists)
-    return saver().save(dylibPath);
+    return lldSaver().save(dylibPath);
   return {};
 }
 
@@ -266,7 +266,7 @@ macho::findPathCombination(const Twine &name,
       bool exists = fs::exists(location);
       searchedDylib(location, exists);
       if (exists)
-        return saver().save(location.str());
+        return lldSaver().save(location.str());
     }
   }
   return {};
