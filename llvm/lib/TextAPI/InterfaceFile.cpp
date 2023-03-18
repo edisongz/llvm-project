@@ -112,7 +112,8 @@ void InterfaceFile::addSymbol(SymbolKind Kind, StringRef Name,
   Name = copyString(Name);
   auto result = Symbols.try_emplace(SymbolsMapKey{Kind, Name}, nullptr);
   if (result.second)
-    result.first->second = new (Allocator) Symbol{Kind, Name, Targets, Flags};
+    result.first->second =
+        new (Allocator.Allocate<Symbol>()) Symbol{Kind, Name, Targets, Flags};
   else
     for (const auto &Target : Targets)
       result.first->second->addTarget(Target);

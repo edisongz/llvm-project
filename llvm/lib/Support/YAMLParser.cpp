@@ -2000,7 +2000,7 @@ Node *Node::parseBlockNode() {
   return Doc->parseBlockNode();
 }
 
-BumpPtrAllocator &Node::getAllocator() {
+MallocAllocator &Node::getAllocator() {
   return Doc->NodeAllocator;
 }
 

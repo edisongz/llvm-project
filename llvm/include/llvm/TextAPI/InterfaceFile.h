@@ -406,14 +406,15 @@ public:
   bool operator!=(const InterfaceFile &O) const { return !(*this == O); }
 
 private:
-  llvm::BumpPtrAllocator Allocator;
+  llvm::MallocAllocator Allocator;
   StringRef copyString(StringRef String) {
     if (String.empty())
       return {};
 
-    void *Ptr = Allocator.Allocate(String.size(), 1);
+    char *Ptr = Allocator.Allocate<char>(String.size() + 1);
     memcpy(Ptr, String.data(), String.size());
-    return StringRef(reinterpret_cast<const char *>(Ptr), String.size());
+    Ptr[String.size()] = '\0';
+    return StringRef(Ptr, String.size());
   }
 
   TargetList Targets;

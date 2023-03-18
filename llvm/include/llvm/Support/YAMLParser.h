@@ -137,12 +137,12 @@ public:
   Node(const Node &) = delete;
   void operator=(const Node &) = delete;
 
-  void *operator new(size_t Size, BumpPtrAllocator &Alloc,
+  void *operator new(size_t Size, MallocAllocator &Alloc,
                      size_t Alignment = 16) noexcept {
     return Alloc.Allocate(Size, Alignment);
   }
 
-  void operator delete(void *Ptr, BumpPtrAllocator &Alloc,
+  void operator delete(void *Ptr, MallocAllocator &Alloc,
                        size_t Size) noexcept {
     Alloc.Deallocate(Ptr, Size, 0);
   }
@@ -168,7 +168,7 @@ public:
   Token &peekNext();
   Token getNext();
   Node *parseBlockNode();
-  BumpPtrAllocator &getAllocator();
+  MallocAllocator &getAllocator();
   void setError(const Twine &Message, Token &Location) const;
   bool failed() const;
 
@@ -556,7 +556,7 @@ private:
 
   /// Used to allocate nodes to. All are destroyed without calling their
   ///        destructor when the document is destroyed.
-  BumpPtrAllocator NodeAllocator;
+  MallocAllocator NodeAllocator;
 
   /// The root node. Used to support skipping a partially parsed
   ///        document.
