@@ -77,6 +77,8 @@ public:
                          uint32_t align, bool isPrivateExtern);
 
   Symbol *addDylib(StringRef name, DylibFile *file, bool isWeakDef, bool isTlv);
+  Symbol *resolveDylib(StringRef name, DylibFile *file, bool isWeakDef,
+                       bool isTlv);
   Symbol *addDynamicLookup(StringRef name);
 
   Symbol *addLazyArchive(StringRef name, ArchiveFile *file,

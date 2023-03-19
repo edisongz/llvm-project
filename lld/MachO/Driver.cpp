@@ -1164,6 +1164,8 @@ static void resolveSymbols() {
   parallelForEach(inputFiles, [](InputFile *file) {
     if (auto *objFile = dyn_cast<ObjFile>(file))
       objFile->resolveSymbols();
+    else if (auto *dylib = dyn_cast<DylibFile>(file))
+      dylib->resolveSymbols();
   });
 
   parallelForEach(inputFiles, [](InputFile *file) {

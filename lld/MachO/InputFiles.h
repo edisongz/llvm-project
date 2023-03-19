@@ -240,6 +240,7 @@ public:
 
   void parseLoadCommands(MemoryBufferRef mb);
   void parseReexports(const llvm::MachO::InterfaceFile &interface);
+  void resolveSymbols();
   bool isReferenced() const { return numReferencedSymbols > 0; }
   bool isExplicitlyLinked() const;
   void setExplicitlyLinked() { explicitlyLinked = true; }

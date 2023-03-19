@@ -289,6 +289,17 @@ Symbol *SymbolTable::addCommonEager(StringRef name, InputFile *file,
 
 Symbol *SymbolTable::addDylib(StringRef name, DylibFile *file, bool isWeakDef,
                               bool isTlv) {
+  typename decltype(symMap)::const_accessor accessor;
+  auto *sym = reinterpret_cast<Symbol *>(new SymbolUnion());
+  symMap.insert(accessor,
+                {CachedHashStringRef(name),
+                 replaceSymbol<DylibSymbol>(sym, file, name, isWeakDef,
+                                            RefState::Unreferenced, isTlv)});
+  return accessor->second;
+}
+
+Symbol *SymbolTable::resolveDylib(StringRef name, DylibFile *file,
+                                  bool isWeakDef, bool isTlv) {
   auto [s, wasInserted] = insert(name, file);
 
   RefState refState = RefState::Unreferenced;
@@ -317,7 +328,8 @@ Symbol *SymbolTable::addDylib(StringRef name, DylibFile *file, bool isWeakDef,
 }
 
 Symbol *SymbolTable::addDynamicLookup(StringRef name) {
-  return addDylib(name, /*file=*/nullptr, /*isWeakDef=*/false, /*isTlv=*/false);
+  return resolveDylib(name, /*file=*/nullptr, /*isWeakDef=*/false,
+                      /*isTlv=*/false);
 }
 
 Symbol *SymbolTable::addLazyArchive(StringRef name, ArchiveFile *file,

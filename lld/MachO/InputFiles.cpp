@@ -2029,6 +2029,13 @@ void DylibFile::parseReexports(const InterfaceFile &interface) {
   }
 }
 
+void DylibFile::resolveSymbols() {
+  for (Symbol *sym : symbols)
+    if (auto *dylibSymbol = dyn_cast<DylibSymbol>(sym))
+      symtab->resolveDylib(dylibSymbol->getName(), this,
+                           dylibSymbol->isWeakDef(), dylibSymbol->isTlv());
+}
+
 bool DylibFile::isExplicitlyLinked() const {
   if (!explicitlyLinked)
     return false;
