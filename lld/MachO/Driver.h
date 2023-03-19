@@ -18,12 +18,14 @@
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <set>
+#include <tbb/concurrent_set.h>
 #include <type_traits>
 
 namespace lld::macho {
 
 class DylibFile;
 class InputFile;
+class ObjFile;
 
 class MachOOptTable : public llvm::opt::OptTable {
 public:
@@ -40,7 +42,7 @@ enum {
 #undef OPTION
 };
 
-void parseLCLinkerOption(InputFile *, unsigned argc, StringRef data);
+void parseLCLinkerOption(ObjFile *, unsigned argc, StringRef data);
 
 std::string createResponseFile(const llvm::opt::InputArgList &args);
 
@@ -105,7 +107,7 @@ private:
   // The paths need to be alphabetically ordered.
   // We need to own the paths because some of them are temporarily
   // constructed.
-  std::set<std::string> notFounds;
+  tbb::concurrent_set<std::string> notFounds;
 };
 
 extern std::unique_ptr<DependencyTracker> depTracker;

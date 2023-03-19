@@ -10,6 +10,7 @@
 #include "Driver.h"
 #include "InputFiles.h"
 #include "ObjC.h"
+#include "SymbolTable.h"
 #include "Target.h"
 
 #include "lld/Common/Args.h"
@@ -203,18 +204,22 @@ Optional<StringRef> macho::resolveDylibPath(StringRef dylibPath) {
 
 // It's not uncommon to have multiple attempts to load a single dylib,
 // especially if it's a commonly re-exported core library.
-static DenseMap<CachedHashStringRef, DylibFile *> loadedDylibs;
+static tbb::concurrent_hash_map<CachedHashStringRef, DylibFile *, HashCmp>
+    loadedDylibs;
 
 DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
                             bool isBundleLoader, bool explicitlyLinked) {
   CachedHashStringRef path(mbref.getBufferIdentifier());
-  DylibFile *&file = loadedDylibs[path];
-  if (file) {
-    if (explicitlyLinked)
-      file->setExplicitlyLinked();
-    return file;
+  typename decltype(loadedDylibs)::const_accessor accessor;
+  if (loadedDylibs.find(accessor, path)) {
+    if (accessor->second) {
+      if (explicitlyLinked)
+        accessor->second->setExplicitlyLinked();
+      return accessor->second;
+    }
   }
 
+  DylibFile *file = nullptr;
   DylibFile *newFile;
   file_magic magic = identify_magic(mbref.getBuffer());
   if (magic == file_magic::tapi_file) {
@@ -232,8 +237,8 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
     // `file` reference might become invalid after parseReexports() -- so copy
     // the pointer it refers to before continuing.
     newFile = file;
-    if (newFile->exportingFile)
-      newFile->parseReexports(**result);
+    //    if (newFile->exportingFile)
+    //      newFile->parseReexports(**result);
   } else {
     assert(magic == file_magic::macho_dynamically_linked_shared_lib ||
            magic == file_magic::macho_dynamically_linked_shared_lib_stub ||
@@ -244,10 +249,11 @@ DylibFile *macho::loadDylib(MemoryBufferRef mbref, DylibFile *umbrella,
     // parseLoadCommands() can also recursively call loadDylib(). See comment
     // in previous block for why this means we must copy `file` here.
     newFile = file;
-    if (newFile->exportingFile)
-      newFile->parseLoadCommands(mbref);
+    //    if (newFile->exportingFile)
+    //      newFile->parseLoadCommands(mbref);
   }
-  return newFile;
+  loadedDylibs.insert(accessor, {path, newFile});
+  return accessor->second;
 }
 
 void macho::resetLoadedDylibs() { loadedDylibs.clear(); }

@@ -25,6 +25,7 @@
 #include "llvm/Support/Threading.h"
 #include "llvm/TextAPI/TextAPIReader.h"
 
+#include <tbb/concurrent_hash_map.h>
 #include <vector>
 
 namespace llvm {
@@ -45,6 +46,7 @@ class ConcatInputSection;
 class Symbol;
 class Defined;
 class AliasSymbol;
+class HashCmp;
 struct Reloc;
 enum class RefState : uint8_t;
 
@@ -166,6 +168,7 @@ public:
           bool lazy = false, bool forceHidden = false);
   ArrayRef<llvm::MachO::data_in_code_entry> getDataInCode() const;
   ArrayRef<uint8_t> getOptimizationHints() const;
+  void parseLinkerOption();
   void parseFile();
   void resolveSymbols();
   void markLive();
@@ -184,6 +187,7 @@ public:
   Section *addrSigSection = nullptr;
   const uint32_t modTime;
   bool forceHidden;
+  std::vector<InputFile *> linkerOptionFiles;
   std::vector<ConcatInputSection *> debugSections;
   std::vector<CallGraphEntry> callGraph;
   llvm::DenseMap<ConcatInputSection *, FDE> fdes;
@@ -303,6 +307,7 @@ public:
   Error fetch(const llvm::object::Archive::Child &, StringRef reason,
               bool lazyArchiveMember = false);
   const llvm::object::Archive &getArchive() const { return *file; };
+  constexpr llvm::SetVector<InputFile *> &getMembers() { return members; }
   static bool classof(const InputFile *f) { return f->kind() == ArchiveKind; }
 
 private:
@@ -312,6 +317,7 @@ private:
   llvm::DenseSet<uint64_t> seen;
   // Load all symbols with hidden visibility (-load_hidden).
   bool forceHidden;
+  llvm::SetVector<InputFile *> members;
 };
 
 class BitcodeFile final : public InputFile {
@@ -331,7 +337,10 @@ private:
 };
 
 extern llvm::SetVector<InputFile *> inputFiles;
-extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
+extern llvm::SetVector<InputFile *> dylibFiles;
+extern tbb::concurrent_hash_map<llvm::CachedHashStringRef, MemoryBufferRef,
+                                HashCmp>
+    cachedReads;
 
 llvm::Optional<MemoryBufferRef> readFile(StringRef path);
 

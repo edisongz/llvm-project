@@ -47,10 +47,12 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/TextAPI/PackedVersion.h"
 
 #include <algorithm>
+#include <tbb/concurrent_hash_map.h>
 #include <tbb/parallel_for_each.h>
 
 using namespace llvm;
@@ -63,6 +65,7 @@ using namespace lld::macho;
 
 std::unique_ptr<Configuration> macho::config;
 std::unique_ptr<DependencyTracker> macho::depTracker;
+static ThreadPool threadPool;
 
 static HeaderFileType getOutputType(const InputArgList &args) {
   // TODO: -r, -dylinker, -preload...
@@ -263,7 +266,28 @@ struct ArchiveFileInfo {
   bool isCommandLineLoad;
 };
 
-static DenseMap<StringRef, ArchiveFileInfo> loadedArchives;
+struct LibraryOptions {
+  // for dynamic libraries
+  bool forceWeakImport : 1;
+  bool reexport : 1;
+  bool isBundleLoader : 1;
+  bool forceNeeded : 1;
+  bool isExplicit : 1;
+  // for static libraries
+  bool isForceHidden : 1;
+};
+
+struct InputFileInfo {
+  StringRef name;
+  LoadType loadType;
+  int64_t order;
+  bool isLazy : 1;
+  LibraryOptions options;
+};
+
+static tbb::concurrent_hash_map<CachedHashStringRef, ArchiveFileInfo, HashCmp>
+    loadedArchives;
+static std::vector<InputFileInfo> inputFileInfos;
 
 static InputFile *addFile(StringRef path, LoadType loadType,
                           bool isLazy = false, bool isExplicit = true,
@@ -279,29 +303,29 @@ static InputFile *addFile(StringRef path, LoadType loadType,
   switch (magic) {
   case file_magic::archive: {
     bool isCommandLineLoad = loadType != LoadType::LCLinkerOption;
+    // No cached archive, we need to create a new one
+    std::unique_ptr<object::Archive> archive = CHECK(
+        object::Archive::create(mbref), path + ": failed to parse archive");
+
+    if (!archive->isEmpty() && !archive->hasSymbolTable())
+      error(path + ": archive has no index; run ranlib to add one");
+    ArchiveFile *file = new ArchiveFile(std::move(archive), isForceHidden);
     // Avoid loading archives twice. If the archives are being force-loaded,
     // loading them twice would create duplicate symbol errors. In the
     // non-force-loading case, this is just a minor performance optimization.
     // We don't take a reference to cachedFile here because the
     // loadArchiveMember() call below may recursively call addFile() and
     // invalidate this reference.
-    auto entry = loadedArchives.find(path);
-
-    ArchiveFile *file;
-    if (entry == loadedArchives.end()) {
-      // No cached archive, we need to create a new one
-      std::unique_ptr<object::Archive> archive = CHECK(
-          object::Archive::create(mbref), path + ": failed to parse archive");
-
-      if (!archive->isEmpty() && !archive->hasSymbolTable())
-        error(path + ": archive has no index; run ranlib to add one");
-      file = new ArchiveFile(std::move(archive), isForceHidden);
-    } else {
-      file = entry->second.file;
+    typename decltype(loadedArchives)::const_accessor accessor;
+    bool result = loadedArchives.insert(
+        accessor,
+        {CachedHashStringRef(path), ArchiveFileInfo{file, isCommandLineLoad}});
+    if (!result) {
+      file = accessor->second.file;
       // Command-line loads take precedence. If file is previously loaded via
       // command line, or is loaded via LC_LINKER_OPTION and being loaded via
       // LC_LINKER_OPTION again, using the cached archive is enough.
-      if (entry->second.isCommandLineLoad || !isCommandLineLoad)
+      if (accessor->second.isCommandLineLoad || !isCommandLineLoad)
         return file;
     }
 
@@ -369,7 +393,6 @@ static InputFile *addFile(StringRef path, LoadType loadType,
               ": Archive::children failed: " + toString(std::move(e)));
     }
 
-    loadedArchives[path] = ArchiveFileInfo{file, isCommandLineLoad};
     newFile = file;
     break;
   }
@@ -403,14 +426,13 @@ static InputFile *addFile(StringRef path, LoadType loadType,
     // print the .a name here. Similarly skip lazy files.
     if (config->printEachFile && magic != file_magic::archive && !isLazy)
       message(toString(newFile));
-    inputFiles.insert(newFile);
   }
   return newFile;
 }
 
-static void addLibrary(StringRef name, bool isNeeded, bool isWeak,
-                       bool isReexport, bool isHidden, bool isExplicit,
-                       LoadType loadType) {
+static InputFile *addLibrary(StringRef name, bool isNeeded, bool isWeak,
+                             bool isReexport, bool isHidden, bool isExplicit,
+                             LoadType loadType) {
   if (Optional<StringRef> path = findLibrary(name)) {
     if (auto *dylibFile = dyn_cast_or_null<DylibFile>(
             addFile(*path, loadType, /*isLazy=*/false, isExplicit,
@@ -423,18 +445,21 @@ static void addLibrary(StringRef name, bool isNeeded, bool isWeak,
         config->hasReexports = true;
         dylibFile->reexport = true;
       }
+      return dylibFile;
     }
-    return;
+    return nullptr;
   }
   error("library not found for -l" + name);
+  return nullptr;
 }
 
 static DenseSet<StringRef> loadedObjectFrameworks;
-static void addFramework(StringRef name, bool isNeeded, bool isWeak,
-                         bool isReexport, bool isExplicit, LoadType loadType) {
+static InputFile *addFramework(StringRef name, bool isNeeded, bool isWeak,
+                               bool isReexport, bool isExplicit,
+                               LoadType loadType) {
   if (Optional<StringRef> path = findFramework(name)) {
     if (loadedObjectFrameworks.contains(*path))
-      return;
+      return nullptr;
 
     InputFile *file =
         addFile(*path, loadType, /*isLazy=*/false, isExplicit, false);
@@ -456,15 +481,16 @@ static void addFramework(StringRef name, bool isNeeded, bool isWeak,
       // forceNeeded by subsequent loads
       loadedObjectFrameworks.insert(*path);
     }
-    return;
+    return file;
   }
   warn("framework not found for -framework " + name);
+  return nullptr;
 }
 
 // Parses LC_LINKER_OPTION contents, which can add additional command line
 // flags. This directly parses the flags instead of using the standard argument
 // parser to improve performance.
-void macho::parseLCLinkerOption(InputFile *f, unsigned argc, StringRef data) {
+void macho::parseLCLinkerOption(ObjFile *f, unsigned argc, StringRef data) {
   if (config->ignoreAutoLink)
     return;
 
@@ -482,28 +508,36 @@ void macho::parseLCLinkerOption(InputFile *f, unsigned argc, StringRef data) {
   if (arg.consume_front("-l")) {
     if (config->ignoreAutoLinkOptions.contains(arg))
       return;
-    addLibrary(arg, /*isNeeded=*/false, /*isWeak=*/false,
-               /*isReexport=*/false, /*isHidden=*/false, /*isExplicit=*/false,
-               LoadType::LCLinkerOption);
+    if (auto *file = addLibrary(arg, /*isNeeded=*/false, /*isWeak=*/false,
+                                /*isReexport=*/false, /*isHidden=*/false,
+                                /*isExplicit=*/false, LoadType::LCLinkerOption))
+      f->linkerOptionFiles.push_back(file);
   } else if (arg == "-framework") {
     StringRef name = argv[++i];
     if (config->ignoreAutoLinkOptions.contains(name))
       return;
-    addFramework(name, /*isNeeded=*/false, /*isWeak=*/false,
-                 /*isReexport=*/false, /*isExplicit=*/false,
-                 LoadType::LCLinkerOption);
+    if (auto *file = addFramework(name, /*isNeeded=*/false, /*isWeak=*/false,
+                                  /*isReexport=*/false, /*isExplicit=*/false,
+                                  LoadType::LCLinkerOption))
+      f->linkerOptionFiles.push_back(file);
   } else {
     error(arg + " is not allowed in LC_LINKER_OPTION");
   }
 }
 
-static void addFileList(StringRef path, bool isLazy) {
+static void addFileList(StringRef path, bool isLazy, int64_t &order) {
   Optional<MemoryBufferRef> buffer = readFile(path);
   if (!buffer)
     return;
   MemoryBufferRef mbref = *buffer;
-  for (StringRef path : args::getLines(mbref))
-    addFile(rerootPath(path), LoadType::CommandLine, isLazy);
+  for (StringRef path : args::getLines(mbref)) {
+    InputFileInfo info;
+    info.name = rerootPath(path);
+    info.loadType = LoadType::CommandLine;
+    info.order = order++;
+    info.isLazy = isLazy;
+    inputFileInfos.push_back(info);
+  }
 }
 
 // We expect sub-library names of the form "libfoo", which will match a dylib
@@ -1071,62 +1105,99 @@ static void createFiles(const InputArgList &args) {
   // This loop should be reserved for options whose exact ordering matters.
   // Other options should be handled via filtered() and/or getLastArg().
   bool isLazy = false;
+  int64_t priority = 10000;
   for (const Arg *arg : args) {
     const Option &opt = arg->getOption();
     warnIfDeprecatedOption(opt);
     warnIfUnimplementedOption(opt);
 
+    InputFileInfo info;
     switch (opt.getID()) {
-    case OPT_INPUT:
-      addFile(rerootPath(arg->getValue()), LoadType::CommandLine, isLazy);
-      break;
-    case OPT_needed_library:
-      if (auto *dylibFile = dyn_cast_or_null<DylibFile>(
-              addFile(rerootPath(arg->getValue()), LoadType::CommandLine)))
-        dylibFile->forceNeeded = true;
-      break;
-    case OPT_reexport_library:
-      if (auto *dylibFile = dyn_cast_or_null<DylibFile>(
-              addFile(rerootPath(arg->getValue()), LoadType::CommandLine))) {
-        config->hasReexports = true;
-        dylibFile->reexport = true;
-      }
-      break;
-    case OPT_weak_library:
-      if (auto *dylibFile = dyn_cast_or_null<DylibFile>(
-              addFile(rerootPath(arg->getValue()), LoadType::CommandLine)))
-        dylibFile->forceWeakImport = true;
-      break;
+    case OPT_INPUT: {
+      info.name = rerootPath(arg->getValue());
+      info.loadType = LoadType::CommandLine;
+      info.order = priority++;
+      info.isLazy = isLazy;
+      inputFileInfos.push_back(info);
+    } break;
+    case OPT_needed_library: {
+      info.name = rerootPath(arg->getValue());
+      info.loadType = LoadType::CommandLine;
+      info.order = priority++;
+      info.isLazy = isLazy;
+      info.options.forceNeeded = true;
+      inputFileInfos.push_back(info);
+    } break;
+    case OPT_reexport_library: {
+      info.name = rerootPath(arg->getValue());
+      info.loadType = LoadType::CommandLine;
+      info.order = priority++;
+      info.isLazy = isLazy;
+      info.options.reexport = true;
+      inputFileInfos.push_back(info);
+    } break;
+    case OPT_weak_library: {
+      info.name = rerootPath(arg->getValue());
+      info.loadType = LoadType::CommandLine;
+      info.order = priority++;
+      info.isLazy = isLazy;
+      info.options.forceWeakImport = true;
+      inputFileInfos.push_back(info);
+    } break;
     case OPT_filelist:
-      addFileList(arg->getValue(), isLazy);
+      addFileList(arg->getValue(), isLazy, priority);
       break;
-    case OPT_force_load:
-      addFile(rerootPath(arg->getValue()), LoadType::CommandLineForce);
-      break;
-    case OPT_load_hidden:
-      addFile(rerootPath(arg->getValue()), LoadType::CommandLine,
-              /*isLazy=*/false, /*isExplicit=*/true, /*isBundleLoader=*/false,
-              /*isForceHidden=*/true);
-      break;
+    case OPT_force_load: {
+      info.name = rerootPath(arg->getValue());
+      info.loadType = LoadType::CommandLineForce;
+      info.order = priority++;
+      inputFileInfos.push_back(info);
+    } break;
+    case OPT_load_hidden: {
+      info.name = rerootPath(arg->getValue());
+      info.loadType = LoadType::CommandLine;
+      info.order = priority++;
+      info.options.isExplicit = true;
+      info.options.isForceHidden = true;
+      inputFileInfos.push_back(info);
+    } break;
     case OPT_l:
     case OPT_needed_l:
     case OPT_reexport_l:
     case OPT_weak_l:
-    case OPT_hidden_l:
-      addLibrary(arg->getValue(), opt.getID() == OPT_needed_l,
-                 opt.getID() == OPT_weak_l, opt.getID() == OPT_reexport_l,
-                 opt.getID() == OPT_hidden_l,
-                 /*isExplicit=*/true, LoadType::CommandLine);
-      break;
+    case OPT_hidden_l: {
+      if (Optional<StringRef> path = findLibrary(arg->getValue())) {
+        info.name = *path;
+        info.loadType = LoadType::CommandLine;
+        info.order = priority++;
+        info.isLazy = false;
+        info.options.forceNeeded = opt.getID() == OPT_needed_l;
+        info.options.isExplicit = true;
+        info.options.isBundleLoader = false;
+        info.options.isForceHidden = opt.getID() == OPT_hidden_l;
+        info.options.forceWeakImport = opt.getID() == OPT_weak_l;
+        info.options.reexport = opt.getID() == OPT_reexport_l;
+        inputFileInfos.push_back(info);
+      }
+    } break;
     case OPT_framework:
     case OPT_needed_framework:
     case OPT_reexport_framework:
-    case OPT_weak_framework:
-      addFramework(arg->getValue(), opt.getID() == OPT_needed_framework,
-                   opt.getID() == OPT_weak_framework,
-                   opt.getID() == OPT_reexport_framework, /*isExplicit=*/true,
-                   LoadType::CommandLine);
-      break;
+    case OPT_weak_framework: {
+      if (Optional<StringRef> path = findFramework(arg->getValue())) {
+        info.name = *path;
+        info.loadType = LoadType::CommandLine;
+        info.order = priority++;
+        info.isLazy = false;
+        info.options.forceNeeded = opt.getID() == OPT_needed_framework;
+        info.options.isExplicit = true;
+        info.options.isBundleLoader = false;
+        info.options.isForceHidden = false;
+        info.options.forceWeakImport = opt.getID() == OPT_weak_framework;
+        info.options.reexport = opt.getID() == OPT_reexport_framework;
+        inputFileInfos.push_back(info);
+      }
+    } break;
     case OPT_start_lib:
       if (isLazy)
         error("nested --start-lib");
@@ -1141,11 +1212,32 @@ static void createFiles(const InputArgList &args) {
       break;
     }
   }
-  // Record input file order
-  int64_t priority = 10000;
-  for (InputFile *file : inputFiles) {
-    file->priority = priority++;
+
+  // Parallel initialize input files
+  SetVector<InputFile *> files;
+  SmallVector<std::shared_future<InputFile *>> threadFutures;
+  threadFutures.reserve(inputFileInfos.size());
+  for (const auto &fileInfo : inputFileInfos)
+    threadFutures.emplace_back(threadPool.async([&fileInfo]() {
+      return addFile(fileInfo.name, fileInfo.loadType, fileInfo.isLazy);
+    }));
+  for (auto &future : threadFutures) {
+    if (auto *archiveFile = dyn_cast<ArchiveFile>(future.get()))
+      files.insert(archiveFile->getMembers().begin(),
+                   archiveFile->getMembers().end());
+    else
+      files.insert(future.get());
   }
+
+  // Collect linker options Library/Framework
+  parallelForEach(files, [](InputFile *file) {
+    if (auto *objFile = dyn_cast<ObjFile>(file))
+      objFile->parseLinkerOption();
+  });
+
+  // Record input file order
+  for (InputFile *file : inputFiles)
+    file->priority = priority++;
 }
 
 static void parseInputFiles() {

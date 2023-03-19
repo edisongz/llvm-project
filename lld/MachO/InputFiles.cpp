@@ -102,6 +102,7 @@ std::string lld::toString(const Section &sec) {
 }
 
 SetVector<InputFile *> macho::inputFiles;
+SetVector<InputFile *> macho::dylibFiles;
 std::unique_ptr<TarWriter> macho::tar;
 int InputFile::idCount = 0;
 
@@ -198,13 +199,14 @@ static bool checkCompatibility(const InputFile *input) {
 // level, and other files like the filelist that are only read once.
 // Theoretically this caching could be more efficient by hoisting it, but that
 // would require altering many callers to track the state.
-DenseMap<CachedHashStringRef, MemoryBufferRef> macho::cachedReads;
+tbb::concurrent_hash_map<CachedHashStringRef, MemoryBufferRef, HashCmp>
+    macho::cachedReads;
 // Open a given file path and return it as a memory-mapped file.
 Optional<MemoryBufferRef> macho::readFile(StringRef path) {
   CachedHashStringRef key(path);
-  auto entry = cachedReads.find(key);
-  if (entry != cachedReads.end())
-    return entry->second;
+  typename decltype(cachedReads)::const_accessor accessor;
+  if (cachedReads.find(accessor, key))
+    return accessor->second;
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> mbOrErr = MemoryBuffer::getFile(path);
   if (std::error_code ec = mbOrErr.getError()) {
@@ -223,7 +225,8 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
       read32be(&hdr->magic) != FAT_MAGIC) {
     if (tar)
       tar->append(relativeToRoot(path), mbref.getBuffer());
-    return cachedReads[key] = mbref;
+    cachedReads.insert(accessor, {key, mbref});
+    return accessor->second;
   }
 
   llvm::MallocAllocator &mAlloc = lld::mAlloc();
@@ -250,8 +253,10 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
       error(path + ": slice extends beyond end of file");
     if (tar)
       tar->append(relativeToRoot(path), mbref.getBuffer());
-    return cachedReads[key] = MemoryBufferRef(StringRef(buf + offset, size),
-                                              path.copy(mAlloc));
+    cachedReads.insert(accessor,
+                       {key, MemoryBufferRef(StringRef(buf + offset, size),
+                                             path.copy(mAlloc))});
+    return accessor->second;
   }
 
   error("unable to find matching architecture in " + path);
@@ -941,6 +946,9 @@ ObjFile::ObjFile(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
                  bool lazy, bool forceHidden)
     : InputFile(ObjKind, mb, lazy), modTime(modTime), forceHidden(forceHidden) {
   this->archiveName = std::string(archiveName);
+}
+
+void ObjFile::parseLinkerOption() {
   if (target->wordSize == 8) {
     parseObjFileLinkerOption<LP64>();
   } else {
@@ -1786,7 +1794,6 @@ DylibFile::DylibFile(MemoryBufferRef mb, DylibFile *umbrella,
 
   if (config->printEachFile)
     message(toString(this));
-  inputFiles.insert(this);
 
   deadStrippable = hdr->flags & MH_DEAD_STRIPPABLE_DYLIB;
 
@@ -1946,7 +1953,6 @@ DylibFile::DylibFile(const InterfaceFile &interface, DylibFile *umbrella,
 
   if (config->printEachFile)
     message(toString(this));
-  inputFiles.insert(this);
 
   if (!is_contained(skipPlatformChecks, installName) &&
       !isTargetPlatformArchCompatible(interface.targets(),
@@ -2259,7 +2265,7 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason,
 
   (*file)->lazyArchiveMember.exchange(lazyArchiveMember,
                                       std::memory_order_relaxed);
-  inputFiles.insert(*file);
+  members.insert(*file);
   printArchiveMemberLoad(reason, *file);
   return Error::success();
 }
