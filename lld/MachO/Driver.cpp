@@ -295,7 +295,7 @@ static InputFile *addFile(StringRef path, LoadType loadType,
 
       if (!archive->isEmpty() && !archive->hasSymbolTable())
         error(path + ": archive has no index; run ranlib to add one");
-      file = make<ArchiveFile>(std::move(archive), isForceHidden);
+      file = new ArchiveFile(std::move(archive), isForceHidden);
     } else {
       file = entry->second.file;
       // Command-line loads take precedence. If file is previously loaded via
@@ -384,7 +384,7 @@ static InputFile *addFile(StringRef path, LoadType loadType,
       newFile = dylibFile;
     break;
   case file_magic::bitcode:
-    newFile = make<BitcodeFile>(mbref, "", 0, isLazy);
+    newFile = new BitcodeFile(mbref, "", 0, isLazy);
     break;
   case file_magic::macho_executable:
   case file_magic::macho_bundle:

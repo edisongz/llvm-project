@@ -214,7 +214,7 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
 
   std::unique_ptr<MemoryBuffer> &mb = *mbOrErr;
   MemoryBufferRef mbref = mb->getMemBufferRef();
-  make<std::unique_ptr<MemoryBuffer>>(std::move(mb)); // take mb ownership
+  new std::unique_ptr<MemoryBuffer>(std::move(mb)); // take mb ownership
 
   // If this is a regular non-fat file, return it.
   const char *buf = mbref.getBufferStart();
@@ -226,7 +226,7 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
     return cachedReads[key] = mbref;
   }
 
-  llvm::BumpPtrAllocator &bAlloc = lld::bAlloc();
+  llvm::MallocAllocator &mAlloc = lld::mAlloc();
 
   // Object files and archive files may be fat files, which contain multiple
   // real files for different CPU ISAs. Here, we search for a file that matches
@@ -251,7 +251,7 @@ Optional<MemoryBufferRef> macho::readFile(StringRef path) {
     if (tar)
       tar->append(relativeToRoot(path), mbref.getBuffer());
     return cachedReads[key] = MemoryBufferRef(StringRef(buf + offset, size),
-                                              path.copy(bAlloc));
+                                              path.copy(mAlloc));
   }
 
   error("unable to find matching architecture in " + path);
@@ -1718,8 +1718,8 @@ static DylibFile *findDylib(StringRef path, DylibFile *umbrella,
          make_pointee_range(currentTopLevelTapi->documents())) {
       assert(child.documents().empty());
       if (path == child.getInstallName()) {
-        auto file = make<DylibFile>(child, umbrella, /*isBundleLoader=*/false,
-                                    /*explicitlyLinked=*/false);
+        auto file = new DylibFile(child, umbrella, /*isBundleLoader=*/false,
+                                  /*explicitlyLinked=*/false);
         file->parseReexports(child);
         return file;
       }
